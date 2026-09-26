@@ -19,12 +19,15 @@ exobrain は、利用者（オーナー）の外部脳です。どの AI・ど�
 利用者に頼まれなくても、次のとおり自分から使ってください。
 
 1. 会話の最初に start_session を呼び、返ってきた profile（利用者のルールと知識）に従って会話する。
-2. 会話の区切り（用件が片付いた、話題が大きく変わった、会話が終わりそう）で submit_daily_report を呼ぶ。
+   続けて、利用者の最初の発言を cue にして recall を呼ぶ。
+2. 話題が変わったとき、利用者の過去・好み・決定・進行中の仕事が関わりそうなときは recall を呼ぶ。
+   返ってきた「ひらめき（遠い連想）」は、役に立ちそうなら経路とともに利用者に提案してよい。
+3. 会話の区切り（用件が片付いた、話題が大きく変わった、会話が終わりそう）で submit_daily_report を呼ぶ。
    - report: その会話で起きたこと・決まったこと・注意されたこと・利用者の望みを、日報として Markdown で書く。
    - elements: report を要素に分解したもの。1 要素 = 1 つの出来事(episode)・知識(semantic)・ルール(procedural)。
      注意されたことや利用者の好みは procedural にし、importance を高くする。
    - used_memory_ids: この会話で実際に役立った記憶の id（[n_...] の部分）。
-3. 途中でも、すぐ残すべきことがあれば remember で追加してよい。
+4. 途中でも、すぐ残すべきことがあれば remember で追加してよい。
 
 author が human の記憶は利用者自身の言葉で、最優先です。
 記憶を消したり原文を書き換えたりする道具はありません。それは利用者だけが行います。
@@ -52,6 +55,13 @@ def build_server(brain: Brain) -> MCPServer:
         """会話の最初に必ず呼ぶ。ai_name には自分の名前（例: "Claude Desktop", "Codex"）を入れる。
         session_id と、利用者のルール・知識の要約 (profile) を返す。"""
         return guarded(brain.start_session, ai_name)
+
+    @server.tool(annotations=appends)
+    def recall(session_id: str, cue: str, budget: int = 1500) -> dict[str, Any]:
+        """いまの話題 (cue) から、つながりをたどって関連する記憶を思い出す。
+        返り値の context をそのまま読めばよい。budget はトークン上限（300〜4000）。
+        [n_...] は記憶の id。役に立ったものは日報の used_memory_ids で報告する。"""
+        return guarded(brain.recall, session_id, cue, budget)
 
     @server.tool(annotations=appends, description="会話の途中で、すぐ残すべき記憶を追加する。" + ELEMENTS_DOC)
     def remember(session_id: str, elements: list[dict[str, Any]]) -> dict[str, Any]:

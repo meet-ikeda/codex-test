@@ -19,6 +19,7 @@ from typing import Any, Iterable
 from . import events
 from .bookshelf import body_sha256, read_body, write_original
 from .config import Settings
+from .recall import Recaller, pack
 from .tokens import estimate_tokens
 
 # Design values (docs/design.md). Tune with real use.
@@ -33,6 +34,10 @@ W_ABOUT = 0.5
 W_SAME_REPORT = 0.3
 HEBBIAN_RATE = 0.1
 PROFILE_BUDGET = 500
+RECALL_BUDGET = 1500
+RECALL_BUDGET_RANGE = (300, 4000)
+RECALL_HEBBIAN_RATE = 0.05  # weaker than confirmed use (HEBBIAN_RATE)
+RECALL_REINFORCE_TOP = 5
 
 ELEMENT_KINDS = ("episode", "semantic", "procedural")
 KIND_LABEL_JA = {"episode": "出来事", "semantic": "知識", "procedural": "ルール", "concept": "概念"}
@@ -61,8 +66,13 @@ CREATE INDEX IF NOT EXISTS edges_dst ON edges(dst);
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY, ai_name TEXT NOT NULL, started_at TEXT NOT NULL, last_seen_at TEXT NOT NULL
 );
+-- Short-term memory: what each conversation has recalled.
+CREATE TABLE IF NOT EXISTS session_items (
+    session_id TEXT NOT NULL, node_id TEXT NOT NULL, at TEXT NOT NULL,
+    PRIMARY KEY (session_id, node_id)
+);
 """
-PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions")
+PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions", "session_items")
 
 
 class InvalidInput(ValueError):
@@ -149,6 +159,7 @@ class Brain:
         # MCP runs sync tools in worker threads; one write transaction at a time per process.
         # Across processes, BEGIN IMMEDIATE + busy_timeout serialize writers.
         self._lock = threading.RLock()
+        self._recaller = Recaller(self._conn)
 
     def close(self) -> None:
         self._conn.close()
@@ -209,6 +220,17 @@ class Brain:
                 "UPDATE nodes SET access_count = access_count + 1, last_activated_at = ? WHERE id = ?",
                 [(ev.at, nid) for nid in p["ids"]],
             )
+        elif ev.type == "recalled":
+            c.executemany(
+                "UPDATE nodes SET access_count = access_count + 1, last_activated_at = ? WHERE id = ?",
+                [(ev.at, nid) for nid in p["ids"]],
+            )
+            c.executemany(
+                "INSERT INTO session_items (session_id, node_id, at) VALUES (?, ?, ?)"
+                " ON CONFLICT (session_id, node_id) DO UPDATE SET at = excluded.at",
+                [(p["session_id"], nid, ev.at) for nid in p["ids"]],
+            )
+            c.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (ev.at, p["session_id"]))
         elif ev.type == "session_started":
             c.execute(
                 "INSERT INTO sessions (id, ai_name, started_at, last_seen_at) VALUES (?, ?, ?, ?)",
@@ -266,9 +288,9 @@ class Brain:
         self._emit(actor, "edge_set", {"src": src, "dst": dst, "kind": kind, "weight": round(weight, 6),
                                        "origin": origin})
 
-    def _reinforce(self, actor: str, a: str, b: str) -> None:
+    def _reinforce(self, actor: str, a: str, b: str, rate: float = HEBBIAN_RATE) -> None:
         src, dst = _pair(a, b)
-        w = hebbian(self._edge_weight(src, dst, "association"))
+        w = hebbian(self._edge_weight(src, dst, "association"), rate)
         self._emit(actor, "edge_set", {"src": src, "dst": dst, "kind": "association", "weight": round(w, 6),
                                        "origin": "hebbian", "co_activation": True})
 
@@ -381,6 +403,38 @@ class Brain:
             "nodes": created,
             "reinforced_memory_ids": used,
             "unknown_memory_ids": unknown,
+        }
+
+    def recall(self, session_id: str, cue: str, budget: int = RECALL_BUDGET) -> dict[str, Any]:
+        """Spreading-activation recall packed into a token budget (design §4)."""
+        ai_name = self.session_ai(session_id)
+        if not cue.strip():
+            raise InvalidInput("cue（手がかり）が空です。いまの話題を短い文で渡してください。")
+        lo, hi = RECALL_BUDGET_RANGE
+        budget = max(lo, min(int(budget), hi))
+        with self._lock:
+            r = self._recaller
+            seeds = r.seeds(cue, session_id)
+            activation, hops, parent = r.spread(seeds)
+            hits = r.score(activation, hops, parent)
+            result = pack(r, hits, r.cue_matches(cue), budget)
+            ids = [h.id for h in result.rules + result.related] + [h.id for h, _ in result.insights]
+            if ids:
+                actor = f"ai:{ai_name}"
+                with self._tx():
+                    self._emit(actor, "recalled", {"session_id": session_id, "ids": ids})
+                    # Recalled together, wired together (weakly: use is not yet confirmed).
+                    top = [h.id for h in result.related[:RECALL_REINFORCE_TOP]]
+                    for i, a in enumerate(top):
+                        for b in top[i + 1:]:
+                            self._reinforce(actor, a, b, RECALL_HEBBIAN_RATE)
+        text = result.text()
+        return {
+            "context": text,
+            "memory_ids": [h.id for h in result.rules + result.related],
+            "insight_ids": [h.id for h, _ in result.insights],
+            "tokens": estimate_tokens(text),
+            "budget": budget,
         }
 
     def open_source(self, source_id: str, max_chars: int = 8000) -> dict[str, Any]:

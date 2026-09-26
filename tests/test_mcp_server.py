@@ -18,7 +18,7 @@ def server(brain):
 
 def test_tool_list_has_nothing_destructive(server):
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert set(tools) == {"start_session", "remember", "submit_daily_report", "open_source"}
+    assert set(tools) == {"start_session", "recall", "remember", "submit_daily_report", "open_source"}
     assert "concepts" in tools["remember"].description
     assert "本棚" in tools["submit_daily_report"].description
 
@@ -32,6 +32,9 @@ def test_full_conversation(server, brain):
     assert r["nodes"][0]["kind"] == "procedural"
     assert "結論を先に書く" in call(server, "start_session", {"ai_name": "Claude Desktop"})["profile"]
     assert call(server, "open_source", {"source_id": r["source_id"]})["body"] == "今日は exobrain を試した。"
+    sid2 = call(server, "start_session", {"ai_name": "Claude Desktop"})["session_id"]
+    got = call(server, "recall", {"session_id": sid2, "cue": "文章の書き方"})
+    assert r["nodes"][0]["id"] in got["memory_ids"] and got["tokens"] <= got["budget"]
 
 
 def test_bad_input_reaches_the_ai_as_a_message(server):
