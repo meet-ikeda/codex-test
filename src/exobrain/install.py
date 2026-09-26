@@ -29,7 +29,10 @@ from .config import Settings
 SERVER_NAME = "exobrain"
 APP_LABEL = "jp.exobrain.app"
 APP_PORT = 8765
-SHARED_DRIVE_NAMES = {"Shared drives", "共有ドライブ", "Other computers", "パソコン", ".shortcut-targets-by-id"}
+MY_DRIVE_NAMES = ("マイドライブ", "My Drive")
+# Not ours to write in: shared drives, and the read-only computer backups ("その他のパソコン", seen on a real Mac).
+SHARED_DRIVE_NAMES = {"Shared drives", "共有ドライブ", "Other computers", "その他のパソコン", "パソコン",
+                      ".shortcut-targets-by-id"}
 
 Runner = Callable[[list[str]], int]  # runs a command, returns its exit code
 
@@ -67,12 +70,17 @@ def codex_config(home: Path) -> Path:
 
 def drive_candidates(home: Path) -> list[Path]:
     """Google Drive for desktop keeps accounts under ~/Library/CloudStorage/GoogleDrive-<account>/."""
-    out = []
+    import os
+
+    mine, other = [], []
     for account in sorted((home / "Library" / "CloudStorage").glob("GoogleDrive-*")):
         for sub in sorted(p for p in account.iterdir() if p.is_dir()):
-            if sub.name not in SHARED_DRIVE_NAMES and not sub.name.startswith("."):
-                out.append(sub / "exobrain")
-    return out
+            if sub.name in MY_DRIVE_NAMES:
+                mine.append(sub / "exobrain")
+            elif (sub.name not in SHARED_DRIVE_NAMES and not sub.name.startswith(".")
+                  and os.access(sub, os.W_OK)):
+                other.append(sub / "exobrain")  # My Drive under a name we do not know yet
+    return mine + other
 
 
 def executables() -> tuple[str | None, str | None]:
@@ -222,7 +230,16 @@ def install(settings: Settings, home: Path, drive: Path, sleep_at: tuple[int, in
         r.add("fail", "exobrain のコマンドが見つかりません", "uv tool install でインストールしてから実行してください。")
         return r
 
-    # 1) config.json: the drive folder and Claude Code's location (the OS-launched sleep has no shell PATH).
+    # 1) folders first: nothing else is touched if the drive folder cannot be made
+    try:
+        Settings(settings.home, drive).ensure_dirs()
+    except OSError as e:
+        r.add("fail", f"Google ドライブにフォルダを作れませんでした: {drive}",
+              f"{e.strerror}。書き込めるフォルダ（マイドライブの中など）を --drive で指定してください。")
+        return r
+    r.add("ok", "本棚・受け取り箱・バックアップのフォルダを用意しました", str(drive))
+
+    # 2) config.json: the drive folder and Claude Code's location (the OS-launched sleep has no shell PATH).
     settings.home.mkdir(parents=True, exist_ok=True)
     cfg_path = settings.home / "config.json"
     cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
@@ -239,10 +256,6 @@ def install(settings: Settings, home: Path, drive: Path, sleep_at: tuple[int, in
     else:
         r.add("warn", "Claude Code が見つかりません", "AI による睡眠は動きません（AI なしの睡眠は動きます）。"
               "Claude Code を入れたあと、もう一度 exobrain install を実行してください。")
-
-    # 2) folders
-    Settings(settings.home, drive).ensure_dirs()
-    r.add("ok", "本棚・受け取り箱・バックアップのフォルダを用意しました", str(drive))
 
     # 3) Claude Desktop and Codex
     for name, fn, path in (("Claude Desktop", add_to_claude_desktop, claude_desktop_config(home)),

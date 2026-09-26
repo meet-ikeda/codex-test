@@ -54,6 +54,29 @@ def test_drive_candidates_skip_shared_and_hidden(home):
     assert [p.parent.name for p in inst.drive_candidates(home)] == ["マイドライブ"]
 
 
+def test_read_only_computer_backups_are_never_chosen(tmp_path, monkeypatch):
+    # the layout seen on a real Mac: "その他のパソコン" sorts before "マイドライブ" and is read-only (dr-x------)
+    account = tmp_path / "Library" / "CloudStorage" / "GoogleDrive-ikeda@example.com"
+    (account / "その他のパソコン" / "USB と外部デバイス").mkdir(parents=True)
+    (account / "マイドライブ").mkdir()
+    (account / "作業用").mkdir()
+    monkeypatch.setattr("os.access", lambda p, mode: p.name != "その他のパソコン")  # root ignores chmod
+    assert inst.drive_candidates(tmp_path) == [account / "マイドライブ" / "exobrain", account / "作業用" / "exobrain"]
+    monkeypatch.setattr("os.access", lambda p, mode: False)
+    assert inst.drive_candidates(tmp_path) == [account / "マイドライブ" / "exobrain"]
+
+
+def test_unwritable_drive_fails_before_touching_anything(home, tmp_path):
+    blocked = tmp_path / "not-a-folder"
+    blocked.write_text("")  # mkdir below it fails even for root, like the read-only folder did
+    desk_before = inst.claude_desktop_config(home).read_text()
+    settings = Settings(home=home / ".exobrain", drive_root=home / "x")
+    r = inst.install(settings, home, blocked / "exobrain", run=lambda c: 0, uid=501, platform="darwin")
+    assert not r.ok and "--drive" in r.text()
+    assert not (home / ".exobrain" / "config.json").exists()
+    assert inst.claude_desktop_config(home).read_text() == desk_before
+
+
 def test_install_wires_everything(home, calls):
     r = run_install(home, calls, sleep_at=(3, 5))
     assert r.ok, r.text()

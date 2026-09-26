@@ -81,6 +81,12 @@ exobrain install --sleep-at 03:00
 
 Google ドライブのアカウントが複数ある場合は、どこに置くかを番号で聞かれます。
 
+置き場所は「マイドライブ」（英語表示では「My Drive」）の中が自動で選ばれます。別の場所にしたいときは `--drive` で指定します。
+
+```bash
+exobrain install --drive "$HOME/Library/CloudStorage/GoogleDrive-（アカウント）/マイドライブ/exobrain" --sleep-at 03:00
+```
+
 ## 5. AI に読み込ませる
 
 **Claude Desktop と Codex を完全に終了（⌘Q）してから、開き直してください。** 開き直さないと、登録した設定が読み込まれません。
@@ -130,6 +136,7 @@ exobrain open
 | AI による睡眠が動かない | `~/.exobrain/last-sleep.log` の中身を教えてください |
 | 元に戻したい | `exobrain uninstall`（AI への登録と常駐を外します。記憶は消えません） |
 | アップデートしたい | `uv tool upgrade exobrain` |
+| `exobrain install` が「フォルダを作れませんでした」で止まる | 書き込めない場所（「その他のパソコン」など）が選ばれています。`uv tool upgrade exobrain` で最新にするか、`--drive` でマイドライブの中を指定してください。このエラーのときは、ほかの設定は何も変更していません |
 
 ## 確認できていないこと（実機で確かめたい点）
 
