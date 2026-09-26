@@ -128,6 +128,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--daily-logs-from", help="Codex・Claude Code の会話から毎晩日報を作る。この日付以降の会話が対象"
                                               "（例: 2026-09-27。空文字で止める）")
 
+    s = sub.add_parser("fade", help="原文を海馬から外す（大脳皮質への昇格の対象にしない。本棚には残る）")
+    s.add_argument("source_ids", nargs="+", help="原文の id（src_...）")
+
     sub.add_parser("export", help="大脳皮質の写しを Google ドライブに書き出す（睡眠のたびにも自動で書き出す）")
     s = sub.add_parser("usage", help="睡眠で使ったトークン数を見る")
     s.add_argument("--days", type=int, default=7)
@@ -204,6 +207,15 @@ def main(argv: list[str] | None = None) -> int:
                     if not n or not a.all:
                         break
                 print(f"埋め込みを {total} 件作りました。残り {unencoded_count(brain)} 件。")
+            elif a.cmd == "fade":
+                known = [sid for sid in a.source_ids if brain._conn.execute(
+                    "SELECT 1 FROM hippocampus WHERE source_id = ? AND status = 'waiting'", (sid,)).fetchone()]
+                if known:
+                    with brain._tx():
+                        brain._emit("human", "hippocampus_faded", {"source_ids": known})
+                missing = sorted(set(a.source_ids) - set(known))
+                print(f"海馬から外しました: {len(known)} 件（本棚には残っています）。"
+                      + (f" 海馬に見つからなかったもの: {', '.join(missing)}" if missing else ""))
             elif a.cmd == "export":
                 from .cortex_export import cortex_root, export
 
