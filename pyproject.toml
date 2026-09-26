@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "exobrain"
+version = "0.1.0"
+description = "Append-only external-brain memory that AI can add to but never overwrite"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["mcp>=2.2,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+exobrain = "exobrain.cli:main"
+exobrain-mcp = "exobrain.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
