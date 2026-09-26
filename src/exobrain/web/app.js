@@ -674,5 +674,7 @@ loaders.safety = loadSafety;
 
 // ---- start ---------------------------------------------------------------------------
 
+$("#brand").addEventListener("click", () => window.exobrainIntro && window.exobrainIntro());
+
 loadMeta();
 showTab("brain");
