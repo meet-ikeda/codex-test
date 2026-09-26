@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>exobrain</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-token="__EXOBRAIN_TOKEN__">
+<header class="topbar">
+  <div class="brand">exobrain <span class="brand-sub">外部脳</span></div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="graph" aria-selected="true">グラフ</button>
+    <button role="tab" data-tab="shelf">本棚</button>
+    <button role="tab" data-tab="memo">メモを渡す</button>
+    <button role="tab" data-tab="sleep">睡眠</button>
+    <button role="tab" data-tab="safety">安全装置</button>
+  </nav>
+  <div id="paused-badge" class="badge badge-warn" hidden>一時停止中</div>
+</header>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<!-- グラフ -->
+<main id="tab-graph" class="tab tab-graph">
+  <div class="filters">
+    <input id="g-search" type="search" placeholder="記憶を探す（例: 採用サイト）" aria-label="記憶を探す">
+    <fieldset class="kinds" aria-label="記憶の種類">
+      <label><input type="checkbox" value="semantic" checked><span class="dot dot-semantic"></span>知識</label>
+      <label><input type="checkbox" value="procedural" checked><span class="dot dot-procedural"></span>ルール</label>
+      <label><input type="checkbox" value="episode" checked><span class="dot dot-episode"></span>出来事</label>
+      <span class="legend-item"><span class="dot dot-concept"></span>概念（中継点）</span>
+    </fieldset>
+    <select id="g-days" aria-label="期間">
+      <option value="">全期間</option>
+      <option value="7">直近 7 日</option>
+      <option value="30">直近 30 日</option>
+      <option value="90">直近 90 日</option>
+    </select>
+    <select id="g-origin" aria-label="出所">
+      <option value="">すべての出所</option>
+      <option value="memo">あなたのメモ</option>
+      <option value="sleep">睡眠でまとめた記憶</option>
+    </select>
+    <label class="toggle"><input id="g-dormant" type="checkbox">眠っている記憶も表示</label>
+    <label class="toggle"><input id="g-changed" type="checkbox">前回の睡眠で変わった箇所</label>
+    <label class="toggle"><input id="g-table" type="checkbox">一覧で見る</label>
+  </div>
+  <div class="graph-body">
+    <div id="graph" class="graph-canvas" aria-label="記憶のつながりのグラフ"></div>
+    <div id="graph-empty" class="empty" hidden>まだ記憶がありません。AI と会話するか、メモを渡すと、ここに記憶の網が現れます。</div>
+    <div id="graph-busy" class="busy" hidden>配置を計算しています…</div>
+    <div id="graph-table" class="graph-table" hidden>
+      <table>
+        <thead><tr><th>種類</th><th>内容</th><th>出所</th><th>日付</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <aside id="detail" class="detail" aria-live="polite">
+      <p class="muted">点を選ぶと、記憶の中身とつながりがここに表示されます。線の太さはつながりの強さ、点の大きさは記憶の強さです。</p>
+    </aside>
+  </div>
+  <div class="graph-foot muted" id="graph-stats"></div>
+</main>
+
+<!-- 本棚 -->
+<main id="tab-shelf" class="tab tab-shelf" hidden>
+  <div class="shelf-side">
+    <input id="s-search" type="search" placeholder="本棚を全文検索" aria-label="本棚を全文検索">
+    <h3>話題の棚</h3>
+    <ul id="s-topics" class="plain"></ul>
+    <h3>日付別</h3>
+    <ul id="s-months" class="plain"></ul>
+    <h3>出所別</h3>
+    <ul id="s-origins" class="plain"></ul>
+  </div>
+  <div class="shelf-list">
+    <h2 id="s-list-title">すべての原文</h2>
+    <ul id="s-list" class="plain rows"></ul>
+  </div>
+  <article id="s-reader" class="reader">
+    <p class="muted">原文を選ぶと、ここに原文のまま表示されます。</p>
+  </article>
+</main>
+
+<!-- メモを渡す -->
+<main id="tab-memo" class="tab tab-narrow" hidden>
+  <h2>メモを渡す</h2>
+  <p class="muted">渡したメモは原文のまま本棚に保管され、次の睡眠で記憶に分解されます。Google ドライブの「受け取り箱」フォルダにファイル（.md / .txt）を置いても同じです。</p>
+  <form id="memo-form" class="stack">
+    <label>題名<input id="memo-title" required maxlength="100" placeholder="例: 9/20 打ち合わせ"></label>
+    <label>本文<textarea id="memo-text" required rows="14" placeholder="ここに貼り付け"></textarea></label>
+    <div><button type="submit" class="primary">本棚に渡す</button></div>
+  </form>
+</main>
+
+<!-- 睡眠 -->
+<main id="tab-sleep" class="tab tab-narrow" hidden>
+  <h2>睡眠</h2>
+  <section class="card">
+    <p id="sleep-status">…</p>
+    <div class="row">
+      <button id="sleep-ai" class="primary">眠る（AI で整理する）</button>
+      <button id="sleep-noai">AI なしで眠る</button>
+    </div>
+    <p id="sleep-claude" class="muted"></p>
+  </section>
+  <section class="card">
+    <h3>タイマー</h3>
+    <p class="muted">毎日この時刻に眠ります。Mac を起動したときも、前回から 20 時間以上たっていれば眠ります。</p>
+    <div class="row">
+      <input id="timer-time" type="time" aria-label="睡眠の時刻">
+      <button id="timer-set">設定する</button>
+      <button id="timer-off">タイマーを切る</button>
+    </div>
+    <p id="timer-status" class="muted"></p>
+  </section>
+  <section class="card">
+    <h3>夢日記</h3>
+    <ul id="dreams" class="plain rows"></ul>
+  </section>
+</main>
+
+<!-- 安全装置 -->
+<main id="tab-safety" class="tab tab-narrow" hidden>
+  <h2>安全装置</h2>
+  <section class="card">
+    <h3>一時停止</h3>
+    <p class="muted">止めている間、AI は記憶を追加できません（思い出すことはできます）。</p>
+    <label class="toggle big"><input id="pause" type="checkbox">AI からの書き込みを止める</label>
+  </section>
+  <section class="card">
+    <h3>改ざんのチェック</h3>
+    <div class="row"><button id="verify">チェックする</button><span id="verify-result"></span></div>
+  </section>
+  <section class="card">
+    <h3>バックアップ</h3>
+    <p class="muted">睡眠のたびに自動で作られ、直近 7 つを残します。</p>
+    <div class="row"><button id="backup">いまバックアップする</button></div>
+    <ul id="backups" class="plain rows"></ul>
+  </section>
+  <section class="card danger-zone">
+    <h3>消去</h3>
+    <p class="muted">完全に消去します。元には戻せません。グラフや本棚の「消去の候補に入れる」からも追加できます。</p>
+    <form id="erase-form" class="stack">
+      <label>原文の id（改行区切り）<textarea id="erase-sources" rows="2"></textarea></label>
+      <label>記憶の id（改行区切り）<textarea id="erase-nodes" rows="2"></textarea></label>
+      <div class="row">
+        <label>この日以降<input id="erase-since" type="date"></label>
+        <label>この日より前<input id="erase-until" type="date"></label>
+      </div>
+      <div><button type="submit">消去する内容を確認する</button></div>
+    </form>
+    <div id="erase-plan" hidden>
+      <h4>消去される内容</h4>
+      <ul id="erase-plan-list" class="plain rows"></ul>
+      <form id="erase-confirm" class="stack">
+        <label>確認のため「<span id="confirm-phrase"></span>」と入力してください<input id="erase-phrase" autocomplete="off"></label>
+        <div><button type="submit" class="danger">完全に消去する</button></div>
+      </form>
+    </div>
+    <p id="erase-result"></p>
+  </section>
+</main>
+
+<dialog id="reader-dialog" class="reader-dialog">
+  <form method="dialog"><button class="close" aria-label="閉じる">×</button></form>
+  <article id="dialog-body" class="reader"></article>
+</dialog>
+
+<script src="vendor/graphology.umd.min.js"></script>
+<script src="vendor/graphology-library.min.js"></script>
+<script src="vendor/sigma.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

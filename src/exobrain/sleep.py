@@ -433,9 +433,11 @@ def start(brain: Brain) -> tuple[str, dict[str, int]]:
 
     run_id = new_id("sleep")
     since = last_sleep(brain)
+    before = brain._conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0]
     stats = stage_a(brain, since.isoformat() if since else "0000")
     with brain._tx():
-        brain._emit(ACTOR, "sleep_started", {"id": run_id, "stage_a": stats})
+        # from_event: stage A's changes happen before this event but belong to this sleep.
+        brain._emit(ACTOR, "sleep_started", {"id": run_id, "stage_a": stats, "from_event": before})
     return run_id, stats
 
 

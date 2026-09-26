@@ -317,7 +317,7 @@ class Brain:
                       (p["kind"], p["key"], p.get("value", 0), ev.at))
         elif ev.type == "sleep_started":
             c.execute("INSERT INTO sleep_runs (id, started_at, start_event, stage_a) VALUES (?, ?, ?, ?)",
-                      (p["id"], ev.at, ev.id, events.canonical_json(p["stage_a"])))
+                      (p["id"], ev.at, p.get("from_event", ev.id), events.canonical_json(p["stage_a"])))
         elif ev.type == "sleep_finished":
             c.execute("UPDATE sleep_runs SET finished_at = ?, summary = ?, journal_source_id = ? WHERE id = ?",
                       (ev.at, p["summary"], p.get("journal_source_id"), p["id"]))

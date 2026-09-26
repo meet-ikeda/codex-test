@@ -43,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--if-due", action="store_true", help="前回の睡眠から一定時間たっているときだけ眠る")
     s.add_argument("--no-ai", action="store_true", help="AI を使わない整理だけを行う")
 
+    s = sub.add_parser("app", help="画面（グラフ・本棚・睡眠・安全装置）を開く")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--no-browser", action="store_true", help="ブラウザを自動で開かない")
+
     sub.add_parser("pause", help="AI からの書き込みを一時停止する")
     sub.add_parser("resume", help="一時停止を解除する")
     sub.add_parser("backup", help="脳のバックアップを作る")
@@ -85,6 +89,10 @@ def main(argv: list[str] | None = None) -> int:
                 except sleep.SleepBusy as e:
                     print(e)
                     return 0
+            elif a.cmd == "app":
+                from .app import serve
+
+                serve(brain, a.port, open_browser=not a.no_browser)
             elif a.cmd == "pause":
                 brain.set_paused(True)
                 print("一時停止しました。AI は記憶を追加できません（思い出すことはできます）。")
