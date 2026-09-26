@@ -391,7 +391,7 @@ MCP サーバーの `instructions` には、次の方針を書いておきます
 | 常駐アプリ | `~/Library/LaunchAgents` に launchd の設定を置き、ログイン時に起動する（`RunAtLoad`） | launchd.plist(5) https://keith.github.io/xcode-man-pages/launchd.plist.5.html |
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` に exobrain-mcp を登録する | https://support.claude.com/en/articles/10949351 |
 | Codex | `~/.codex/config.toml` の `[mcp_servers.exobrain]` に command と args を書く | https://learn.chatgpt.com/docs/extend/mcp |
-| 導入コマンド | `exobrain install` 1 回で上の 3 つを設定し、Google ドライブのフォルダを尋ねる。設定ファイルは書き換える前に控えを取る | — |
+| 導入コマンド | `exobrain install` 1 回で上の 3 つと画面の常駐（`jp.exobrain.app`）を設定し、Google ドライブのフォルダ（`~/Library/CloudStorage/GoogleDrive-*/` の中）を尋ねる。設定ファイルは書き換える前に控えを取る。Codex の設定は TOML を文字列として編集し、ほかの設定を一字も変えない。`exobrain doctor` で点検、`exobrain uninstall` で exobrain の分だけを外す | Google ドライブの場所: https://support.google.com/drive/answer/12178485 |
 
 ---
 

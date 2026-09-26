@@ -47,6 +47,15 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--no-browser", action="store_true", help="ブラウザを自動で開かない")
 
+    s = sub.add_parser("install", help="Mac に導入する（Claude Desktop・Codex・常駐・睡眠）")
+    s.add_argument("--drive", help="exobrain を置く Google ドライブのフォルダ（省略すると候補から選ぶ）")
+    s.add_argument("--sleep-at", help="毎日眠る時刻（例: 03:00）。省略するとログイン時のみ")
+    s.add_argument("--no-agents", action="store_true", help="常駐と睡眠の自動起動を設定しない")
+    s.add_argument("--yes", action="store_true", help="確認せずに進める")
+    sub.add_parser("uninstall", help="Claude Desktop・Codex・常駐から外す（記憶は残す）")
+    sub.add_parser("doctor", help="導入の状態を点検する")
+    sub.add_parser("open", help="画面をブラウザで開く")
+
     sub.add_parser("pause", help="AI からの書き込みを一時停止する")
     sub.add_parser("resume", help="一時停止を解除する")
     sub.add_parser("backup", help="脳のバックアップを作る")
@@ -54,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("snapshot", nargs="?", help="省略すると一覧を表示する")
 
     a = p.parse_args(argv)
+    if a.cmd in ("install", "uninstall", "open"):
+        return _setup_commands(a)
     try:
         with open_brain() as brain:
             if a.cmd == "verify":
@@ -93,6 +104,12 @@ def main(argv: list[str] | None = None) -> int:
                 from .app import serve
 
                 serve(brain, a.port, open_browser=not a.no_browser)
+            elif a.cmd == "doctor":
+                from .install import doctor
+
+                report = doctor(brain.settings, Path.home(), brain)
+                print(report.text())
+                return 0 if report.ok else 1
             elif a.cmd == "pause":
                 brain.set_paused(True)
                 print("一時停止しました。AI は記憶を追加できません（思い出すことはできます）。")
@@ -111,6 +128,70 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
     return 0
+
+
+def _setup_commands(a) -> int:
+    import socket
+    import webbrowser
+
+    from . import install as inst
+    from .config import load_settings
+
+    if a.cmd == "open":
+        url = f"http://127.0.0.1:{inst.APP_PORT}/"
+        with socket.socket() as s:
+            running = s.connect_ex(("127.0.0.1", inst.APP_PORT)) == 0
+        if running:
+            webbrowser.open(url)
+            print(url)
+            return 0
+        from .app import serve
+        from .brain import open_brain
+
+        with open_brain() as brain:
+            serve(brain, inst.APP_PORT)
+        return 0
+    home = Path.home()
+    if a.cmd == "uninstall":
+        print(inst.uninstall(home).text())
+        return 0
+    settings = load_settings()
+    drive = Path(a.drive).expanduser() if a.drive else _choose_drive(inst.drive_candidates(home), a.yes)
+    if drive is None:
+        return 2
+    sleep_at = None
+    if a.sleep_at:
+        try:
+            h, m = (int(x) for x in a.sleep_at.split(":"))
+            assert 0 <= h < 24 and 0 <= m < 60
+            sleep_at = (h, m)
+        except (ValueError, AssertionError):
+            print("error: --sleep-at は 03:00 のように指定してください", file=sys.stderr)
+            return 2
+    report = inst.install(settings, home, drive, sleep_at, agents=not a.no_agents)
+    print(report.text())
+    if report.ok:
+        print("\n次に、Claude Desktop と Codex を一度終了してから開き直してください（設定を読み込み直すため）。")
+        print(f"画面: http://127.0.0.1:{inst.APP_PORT}/  （exobrain open でも開けます）")
+    return 0 if report.ok else 1
+
+
+def _choose_drive(candidates: list, yes: bool):
+    if not candidates:
+        print("Google ドライブのフォルダが見つかりませんでした（~/Library/CloudStorage/GoogleDrive-…）。")
+        print("Google ドライブ for desktop を入れてから実行するか、--drive で場所を指定してください。")
+        return None
+    if yes or len(candidates) == 1:
+        print(f"Google ドライブ: {candidates[0]}")
+        return candidates[0]
+    for i, c in enumerate(candidates, 1):
+        print(f"  {i}. {c}")
+    choice = input(f"どこに置きますか？ [1-{len(candidates)}]（Enter で 1）: ").strip() or "1"
+    try:
+        return candidates[int(choice) - 1]
+    except (ValueError, IndexError):
+        print("error: 番号で選んでください", file=sys.stderr)
+        return None
 
 
 if __name__ == "__main__":

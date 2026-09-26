@@ -5,6 +5,7 @@
 
 - 要件: [docs/requirements.md](docs/requirements.md)
 - 設計: [docs/design.md](docs/design.md)
+- Mac への導入手順: [docs/setup-mac.md](docs/setup-mac.md)
 
 ## 進み具合
 
@@ -15,7 +16,7 @@
 | M3 | 受け取り箱、本棚の全文検索、指摘による書き換え（`trace_correction` / `apply_correction`）、消去・一時停止・バックアップと復元 | ✅ |
 | M4 | 睡眠（段階 A・B、夢日記、棚の目録、`exobrain sleep [--if-due] [--no-ai]`、launchd 設定の生成） | ✅ |
 | M5 | 画面（`exobrain app`）: グラフ・本棚・メモ・睡眠ボタンとタイマー・安全装置 | ✅ |
-| M6 | Mac への導入（`exobrain install`）と実地確認 | 未着手 |
+| M6 | Mac への導入（`exobrain install` / `doctor` / `uninstall` / `open`）と実地確認 | 導入の仕組みは ✅、実地確認はこれから（[手順書](docs/setup-mac.md)） |
 
 ## データの置き場所
 
