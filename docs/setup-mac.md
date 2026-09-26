@@ -109,13 +109,39 @@ exobrain open
 
 ---
 
+## v0.5 の追加設定（意味検索と Obsidian）
+
+1. Ollama の公式アプリを入れ、埋め込みモデルを取り込む（約1.2GB）
+
+   ```bash
+   /Applications/Ollama.app/Contents/Resources/ollama pull bge-m3
+   ```
+
+2. exobrain に、`#remember` を探す Obsidian の保管庫を教える（保管庫には書き込みません）
+
+   ```bash
+   exobrain settings --vault "<Obsidian の保管庫のフォルダ>"
+   ```
+
+3. 取り込んで、埋め込みを作る。`exobrain doctor` で「意味検索（Ollama）」と「Obsidian の保管庫」が ✓ になれば完了
+
+   ```bash
+   exobrain ingest
+   exobrain encode --all
+   exobrain doctor
+   ```
+
+Ollama が止まっていても exobrain は動きます（文字の一致だけで探します）。
+
+---
+
 ## 実地確認のチェックリスト（要件定義書 9 章の受け入れ基準）
 
 上から順に試して、結果を教えてください。うまくいかなかったものは、どの AI で・何を言ったかを添えてください。
 
 | # | 試すこと | 期待する結果 |
 |---|---|---|
-| 1 | Claude Desktop で新しいチャットを開き、「私の好みを覚えておいて: 文章は結論から書いてほしい」と伝え、会話を締めくくる | AI が exobrain の道具（start_session、submit_daily_report）を使う。許可を求められたら「許可」 |
+| 1 | Claude Desktop で新しいチャットを開き、「私の好みを覚えておいて: 文章は結論から書いてほしい」と伝える。最後に `/日報` と送る | AI が exobrain の道具（start_session、remember_explicit、submit_daily_log）を使う。許可を求められたら「許可」 |
 | 2 | Claude Desktop で**別の新しいチャット**を開き、「メールの下書きを書いて」と頼む | 何も説明しなくても結論から書く |
 | 3 | Codex で同じように何か頼む | Claude Desktop で覚えたことを踏まえている |
 | 4 | 画面の「01 Graph」を見る | 覚えた記憶が粒子として現れている |

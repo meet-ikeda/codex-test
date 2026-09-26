@@ -323,4 +323,21 @@ def doctor(settings: Settings, home: Path, brain=None) -> Report:
         ok, msg = brain.verify()
         r.add("ok" if ok else "fail", "改ざんチェック", msg)
         r.add("ok", "FTS5 secure-delete", "有効" if brain.fts_secure_delete else "使えない（代わりに索引を作り直す）")
+        from .hippocampus import unencoded_count
+
+        if brain.embedder is None:
+            r.add("warn", "意味検索", "embed_model が空のため、文字の一致だけで探します")
+        else:
+            ok, msg = brain.embedder.status()
+            left = unencoded_count(brain) if ok else 0
+            r.add("ok" if ok else "warn", "意味検索（Ollama）",
+                  msg + (f"。埋め込み待ちのチャンク {left} 件" if left else "") if ok
+                  else msg + "。文字の一致だけで探します")
+    vault = settings.vault_root
+    if vault is None:
+        r.add("warn", "Obsidian の保管庫（#remember）", "未設定: exobrain settings --vault <保管庫のフォルダ>")
+    else:
+        r.add("ok" if vault.is_dir() else "fail", "Obsidian の保管庫（#remember）", str(vault))
+    for extra in settings.extra_inboxes:
+        r.add("ok" if extra.is_dir() else "warn", "追加の受け口（読むだけ）", str(extra))
     return r

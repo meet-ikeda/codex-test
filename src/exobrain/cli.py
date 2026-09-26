@@ -17,13 +17,81 @@ def _print(obj) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
+def _settings(a) -> int:
+    """Change exobrain's own settings file only. Other apps' settings are never touched here."""
+    import json
+    import os
+
+    from .config import load_settings
+
+    home = Path(os.environ.get("EXOBRAIN_HOME", "~/.exobrain")).expanduser()
+    path = home / "config.json"
+    cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    changed = False
+    if a.vault is not None:
+        vault = Path(a.vault).expanduser()
+        if a.vault and not vault.is_dir():
+            print(f"フォルダが見つかりません: {vault}")
+            return 1
+        cfg["vault_root"] = str(vault) if a.vault else None
+        changed = True
+    extras = list(cfg.get("extra_inboxes", []))
+    for e in a.add_extra_inbox:
+        e = str(Path(e).expanduser())
+        if not Path(e).is_dir():
+            print(f"フォルダが見つかりません: {e}")
+            return 1
+        if e not in extras:
+            extras.append(e)
+            changed = True
+    for e in a.remove_extra_inbox:
+        e = str(Path(e).expanduser())
+        if e in extras:
+            extras.remove(e)
+            changed = True
+    cfg["extra_inboxes"] = extras
+    if a.embed_model is not None:
+        cfg["embed_model"] = a.embed_model
+        changed = True
+    if a.downloads is not None:
+        cfg["downloads_dir"] = a.downloads or None
+        changed = True
+    if changed:
+        home.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    st = load_settings()
+    _print({"保管庫（#remember）": str(st.vault_root) if st.vault_root else None,
+            "追加の受け口（読むだけ）": [str(x) for x in st.extra_inboxes],
+            "ダウンロードの見張り": str(st.downloads_dir) if st.downloads_dir else None,
+            "埋め込みモデル": st.embed_model or "（使わない）", "海馬の保持日数": st.hippocampus_days,
+            "Google ドライブ": str(st.drive_root)})
+    if changed:
+        print("\n変更しました。常駐している画面には、次に起動したときから反映されます。")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="exobrain", description="exobrain 外部脳の保守コマンド")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("verify", help="改ざんと本棚の原文をチェックする")
     sub.add_parser("rebuild", help="イベント記録から脳の表を作り直す")
     sub.add_parser("stats", help="記憶の件数を表示する")
-    sub.add_parser("ingest", help="受け取り箱のメモを本棚に取り込む")
+    sub.add_parser("ingest", help="預かりBOX・Obsidian の #remember を取り込む")
+    s = sub.add_parser("encode", help="意味検索の埋め込みを作る（Ollama）")
+    s.add_argument("--all", action="store_true", help="待っているものを全部（既定は 200 件まで）")
+
+    s = sub.add_parser("settings", help="exobrain 自身の設定を見る・変える（~/.exobrain/config.json）")
+    s.add_argument("--vault", help="#remember を探す Obsidian の保管庫のフォルダ")
+    s.add_argument("--add-extra-inbox", action="append", default=[],
+                   help="AI 日報を読むだけで取り込む追加のフォルダ（例: OUTBRAIN の受け口）")
+    s.add_argument("--remove-extra-inbox", action="append", default=[])
+    s.add_argument("--embed-model", help="Ollama の埋め込みモデル（空文字で意味検索を止める）")
+    s.add_argument("--downloads", help="AI 日報を拾うダウンロードフォルダ（空文字で見張らない）")
+
+    s = sub.add_parser("recall", help="思い出す（大脳皮質 → 海馬 → 本棚 → Obsidian）")
+    s.add_argument("cue")
 
     s = sub.add_parser("memo", help="メモを渡す（本文は標準入力またはファイル）")
     s.add_argument("title")
@@ -65,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
     if a.cmd in ("install", "uninstall", "open"):
         return _setup_commands(a)
+    if a.cmd == "settings":
+        return _settings(a)
     try:
         with open_brain() as brain:
             if a.cmd == "verify":
@@ -76,7 +146,27 @@ def main(argv: list[str] | None = None) -> int:
             elif a.cmd == "stats":
                 _print({**brain.stats(), "paused": brain.paused})
             elif a.cmd == "ingest":
-                _print(ingest(brain))
+                from .inbox import scan_vault
+
+                _print({"預かりBOX": ingest(brain), "Obsidian #remember": scan_vault(brain)})
+            elif a.cmd == "encode":
+                from .hippocampus import encode_pending, unencoded_count
+
+                if brain.embedder is None:
+                    print("embed_model が空のため、埋め込みは作りません。")
+                    return 1
+                total = 0
+                while True:
+                    n = encode_pending(brain)
+                    total += n
+                    if not n or not a.all:
+                        break
+                print(f"埋め込みを {total} 件作りました。残り {unencoded_count(brain)} 件。")
+            elif a.cmd == "recall":
+                sid = brain.start_session("exobrain CLI")["session_id"]
+                r = brain.recall(sid, a.cue)
+                print(r["context"])
+                print(f"\n（探した場所: {' → '.join(r['searched'])}、{r['tokens']} トークン）")
             elif a.cmd == "memo":
                 text = Path(a.file).read_text(encoding="utf-8") if a.file else sys.stdin.read()
                 _print(brain.add_memo(a.title, text) or "同じメモがすでに本棚にあります")

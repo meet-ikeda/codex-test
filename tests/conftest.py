@@ -6,7 +6,7 @@ from exobrain.config import Settings
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(home=tmp_path / "home", drive_root=tmp_path / "drive")
+    return Settings(home=tmp_path / "home", drive_root=tmp_path / "drive", embed_model="")
 
 
 @pytest.fixture

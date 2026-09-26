@@ -25,7 +25,7 @@ def test_inbox_memo_goes_to_the_shelf_verbatim(brain, settings):
         ("notes", "human", "memo"), ("採用サイトの気づき", "human", "memo")]
     memo = settings.drive_root / rows[1]["path"]
     assert read_body(memo) == "# 気づき\n社員の生の声は\r\n原文のまま載せる。\n"
-    assert sorted(p.name for p in settings.inbox.iterdir()) == ["写真.png", "書きかけ.md"]
+    assert sorted(p.name for p in settings.inbox.iterdir() if p.is_file()) == ["写真.png", "書きかけ.md"]
     assert brain.verify()[0]
 
 

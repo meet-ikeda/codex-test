@@ -109,9 +109,14 @@ def sleep_lock(brain: Brain):
 
 def stage_a(brain: Brain, since: str) -> dict[str, int]:
     from .brain import _pair, hebbian
-    from .inbox import ingest
+    from .hippocampus import encode_pending, fade_expired
+    from .inbox import ingest, scan_vault
 
-    stats = {"ingested": len(ingest(brain)), "replayed_links": 0, "dormant": 0, "new_links": 0}
+    stats = {"ingested": len(ingest(brain)) + len(scan_vault(brain)), "replayed_links": 0, "dormant": 0,
+             "new_links": 0, "encoded": encode_pending(brain, limit=5000)}
+    with brain._tx():
+        # Information not taken into the cortex leaves the hippocampus (it stays on the bookshelf).
+        stats["faded"] = fade_expired(brain, ACTOR)
     c = brain._conn
     now = datetime.now(timezone.utc)
     with brain._tx():

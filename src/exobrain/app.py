@@ -32,6 +32,7 @@ DEFAULT_PORT = 8765
 MAX_GRAPH_NODES = 5000
 MAX_GRAPH_EDGES = 20000
 INBOX_POLL_SECONDS = 60
+VAULT_SCAN_EVERY = 5  # rounds: the vault is looked through every 5 minutes
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2"}
 
@@ -286,11 +287,20 @@ class App:
         return None
 
     def poll_inbox(self) -> None:
+        """Take in what arrives, look through the vault now and then, and embed new chunks."""
+        from .hippocampus import encode_pending
+        from .inbox import scan_vault
+
+        rounds = 0
         while not self._stop.wait(INBOX_POLL_SECONDS):
-            try:
-                ingest(self.brain)
-            except Exception as e:  # keep the app alive; report in the terminal
-                print(f"inbox: {e}")
+            for step in (lambda: ingest(self.brain),
+                         lambda: scan_vault(self.brain) if rounds % VAULT_SCAN_EVERY == 0 else None,
+                         lambda: encode_pending(self.brain)):
+                try:
+                    step()
+                except Exception as e:  # keep the app alive; report in the terminal
+                    print(f"inbox: {e}")
+            rounds += 1
 
 
 def make_handler(app: App, port: int):

@@ -3,8 +3,10 @@
 どの AI の、どのスレッドでも、あなたのことを最初から知っている状態で会話を始めるための記憶アプリです。
 情報を「要素」に分けて「つながり」で結び、人間の脳のように記憶します。
 
+- **統合仕様書 v0.5（最新。OUTBRAIN v0.4 の記憶モデルと統合）: [docs/spec-v0.5.md](docs/spec-v0.5.md)**
 - 要件: [docs/requirements.md](docs/requirements.md)
-- 設計: [docs/design.md](docs/design.md)
+- 設計: [docs/design.md](docs/design.md)（v0.1 の設計。v0.5 と食い違う部分は v0.5 が優先）
+- 評価: [docs/eval-questions-v2.md](docs/eval-questions-v2.md)（固定した評価質問）、[docs/eval-embedding.md](docs/eval-embedding.md)（検索の設定の測定）
 - Mac への導入手順: [docs/setup-mac.md](docs/setup-mac.md)
 
 ## 進み具合
@@ -16,7 +18,9 @@
 | M3 | 受け取り箱、本棚の全文検索、指摘による書き換え（`trace_correction` / `apply_correction`）、消去・一時停止・バックアップと復元 | ✅ |
 | M4 | 睡眠（段階 A・B、夢日記、棚の目録、`exobrain sleep [--if-due] [--no-ai]`、launchd 設定の生成） | ✅ |
 | M5 | 画面（`exobrain app`）: グラフ・本棚・メモ・睡眠ボタンとタイマー・安全装置 | ✅ |
-| M6 | Mac への導入（`exobrain install` / `doctor` / `uninstall` / `open`）と実地確認 | 導入の仕組みは ✅、実地確認はこれから（[手順書](docs/setup-mac.md)） |
+| M6 | Mac への導入（`exobrain install` / `doctor` / `uninstall` / `open`）と実地確認 | ✅（2026-09-26 に導入） |
+| v0.5 第1区切り | 預かりBOX（`#remember` の見張り、AI 日報 形式 v1、ダウンロードの見張り、追加の受け口）、海馬と本棚の索引（チャンク・bge-m3 の意味検索）、段階的な想起（大脳皮質 → 海馬 → 本棚 → Obsidian → 記録なし）、`remember_explicit` / `submit_daily_log`。AI が自分の判断で大脳皮質に書く道具（`remember` / `submit_daily_report`）は廃止 | ✅ |
+| v0.5 第2区切り | 睡眠A（昇格）、即時レーン（`/good`）、画面の4区分、大脳皮質の Google ドライブへの書き出し、Codex・Claude Code の日報の自動作成 | これから |
 
 ## データの置き場所
 
@@ -33,7 +37,10 @@ pytest
 exobrain verify    # 改ざんと本棚の原文をチェック
 exobrain rebuild   # イベント記録から脳の表を作り直す
 exobrain stats     # 記憶の件数
-exobrain ingest    # 受け取り箱のメモを本棚へ（AI が会話を始めたときにも自動で実行）
+exobrain ingest    # 預かりBOX と Obsidian の #remember を取り込む（常駐の画面が 1 分ごとにも実行）
+exobrain encode --all   # 意味検索の埋め込みを作る（Ollama の bge-m3）
+exobrain recall "話題"  # 思い出す（大脳皮質 → 海馬 → 本棚 → Obsidian）
+exobrain settings --vault <保管庫> --add-extra-inbox <フォルダ> --embed-model bge-m3
 exobrain memo 題名 < メモ.md
 exobrain search 語句
 exobrain sleep [--if-due] [--no-ai]   # 睡眠（AI による整理は Claude Code を使う）

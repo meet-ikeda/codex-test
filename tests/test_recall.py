@@ -95,7 +95,8 @@ def test_budget_is_respected_with_many_memories(brain, session, budget):
         ])
     r = brain.recall(session, "話題3 と 話題7 の件を相談したい", budget=budget)
     assert 0 < r["tokens"] <= budget
-    assert len(r["memory_ids"]) > 3
+    # The cue matches no memory text, so part of the budget goes to looking through the records (spec v0.5 §7.1).
+    assert len(r["memory_ids"]) >= 3
 
 
 def test_recall_is_fast_enough(brain, session):
@@ -120,4 +121,7 @@ def test_bad_input(brain, session):
 
 def test_empty_brain(brain, session):
     r = brain.recall(session, "はじめまして")
-    assert r["context"] == "（関連する記憶はありません）" and r["memory_ids"] == []
+    assert r["context"].startswith("（関連する記憶はありません）") and r["memory_ids"] == []
+    # Nothing anywhere: say so, and forbid pretending otherwise (spec v0.5 §7.1).
+    assert r["no_record"] and "確認できる記録はありませんでした" in r["context"]
+    assert r["searched"] == ["大脳皮質", "海馬", "本棚", "Obsidian"]

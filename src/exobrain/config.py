@@ -21,10 +21,27 @@ DREAMS_DIR = "夢日記"
 BACKUP_DIR = "バックアップ"
 
 
+AI_DAILY_DIR = "AI日報"
+NEEDS_CHECK_DIR = "確認が必要"
+DEFAULT_EMBED_MODEL = "bge-m3"
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+HIPPOCAMPUS_DAYS = 7  # how long information stays in the hippocampus waiting for sleep (spec v0.5 §3)
+
+
 @dataclass(frozen=True)
 class Settings:
     home: Path
     drive_root: Path
+    # The owner's Obsidian vault: read only, scanned for #remember notes (spec v0.5 §5.1).
+    vault_root: Path | None = None
+    # Other folders whose AI daily logs are copied in, never moved (e.g. OUTBRAIN's inbox).
+    extra_inboxes: tuple[Path, ...] = ()
+    # ~/Downloads is watched for AI daily logs saved from Gemini etc. (spec v0.5 §5.2).
+    downloads_dir: Path | None = None
+    # Embedding model served by Ollama. "" turns semantic search off (lexical search still works).
+    embed_model: str = DEFAULT_EMBED_MODEL
+    ollama_url: str = DEFAULT_OLLAMA_URL
+    hippocampus_days: int = HIPPOCAMPUS_DAYS
 
     @property
     def db_path(self) -> Path:
@@ -46,18 +63,31 @@ class Settings:
     def backups(self) -> Path:
         return self.drive_root / BACKUP_DIR
 
+    @property
+    def ai_daily_inbox(self) -> Path:
+        return self.inbox / AI_DAILY_DIR
+
     def ensure_dirs(self) -> None:
-        for d in (self.home, self.inbox, self.originals, self.bookshelf / SHELVES_DIR, self.backups):
+        for d in (self.home, self.inbox, self.ai_daily_inbox, self.originals, self.bookshelf / SHELVES_DIR,
+                  self.backups):
             d.mkdir(parents=True, exist_ok=True)
 
 
 def load_settings() -> Settings:
     """Resolve settings from env vars, then ~/.exobrain/config.json, then defaults."""
     home = Path(os.environ.get("EXOBRAIN_HOME", "~/.exobrain")).expanduser()
-    drive = os.environ.get("EXOBRAIN_DRIVE")
-    if not drive:
-        cfg = home / "config.json"
-        if cfg.exists():
-            drive = json.loads(cfg.read_text(encoding="utf-8")).get("drive_root")
+    cfg_path = home / "config.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+    drive = os.environ.get("EXOBRAIN_DRIVE") or cfg.get("drive_root")
     drive_root = Path(drive).expanduser() if drive else home / "drive"
-    return Settings(home=home, drive_root=drive_root)
+    path_or_none = lambda v: Path(v).expanduser() if v else None  # noqa: E731
+    return Settings(
+        home=home,
+        drive_root=drive_root,
+        vault_root=path_or_none(cfg.get("vault_root")),
+        extra_inboxes=tuple(Path(p).expanduser() for p in cfg.get("extra_inboxes", [])),
+        downloads_dir=path_or_none(cfg.get("downloads_dir", "~/Downloads")),
+        embed_model=os.environ.get("EXOBRAIN_EMBED_MODEL", cfg.get("embed_model", DEFAULT_EMBED_MODEL)),
+        ollama_url=cfg.get("ollama_url", DEFAULT_OLLAMA_URL),
+        hippocampus_days=int(cfg.get("hippocampus_days", HIPPOCAMPUS_DAYS)),
+    )
