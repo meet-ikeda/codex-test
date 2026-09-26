@@ -83,6 +83,12 @@ def plan_erase(brain: Brain, source_ids: list[str] = (), node_ids: list[str] = (
     nodes = {n for n in node_ids if c.execute("SELECT 1 FROM nodes WHERE id = ?", (n,)).fetchone()}
     for s in sources:
         nodes |= {r[0] for r in c.execute("SELECT id FROM nodes WHERE source_id = ?", (s,))}
+        # Memories whose only evidence is this original go with it; shared ones just lose the quote.
+        for (nid,) in c.execute("SELECT node_id FROM node_sources WHERE source_id = ?", (s,)):
+            others = c.execute("SELECT COUNT(*) FROM node_sources WHERE node_id = ? AND source_id NOT IN"
+                               f" ({','.join('?' * len(sources))})", (nid, *sorted(sources))).fetchone()[0]
+            if others == 0:
+                nodes.add(nid)
     if since or until:
         q, args = "SELECT id FROM nodes WHERE kind != 'concept'", []
         if since:
@@ -121,6 +127,15 @@ def erase(brain: Brain, plan: dict[str, list], confirm: str) -> dict[str, Any]:
                     f"UPDATE events SET payload_json = NULL WHERE type = ? AND payload_json IS NOT NULL"
                     f" AND json_extract(payload_json, '$.id') IN ({','.join('?' * len(part))})",
                     (type_, *part),
+                )
+        # Quotes copied from an erased original, or belonging to an erased memory.
+        for field, ids in (("source_id", source_ids), ("node_id", node_ids)):
+            for i in range(0, len(ids), 500):
+                part = ids[i : i + 500]
+                c.execute(
+                    f"UPDATE events SET payload_json = NULL WHERE type = 'node_sourced' AND payload_json IS NOT NULL"
+                    f" AND json_extract(payload_json, '$.{field}') IN ({','.join('?' * len(part))})",
+                    tuple(part),
                 )
     if source_ids and not brain.fts_secure_delete:
         _rebuild_fts(brain)

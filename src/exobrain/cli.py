@@ -56,6 +56,17 @@ def _settings(a) -> int:
     if a.downloads is not None:
         cfg["downloads_dir"] = a.downloads or None
         changed = True
+    if a.daily_logs_from is not None:
+        if a.daily_logs_from:
+            from datetime import date
+
+            try:
+                date.fromisoformat(a.daily_logs_from)
+            except ValueError:
+                print("日付は 2026-09-27 の形で指定してください。")
+                return 1
+        cfg["daily_logs_since"] = a.daily_logs_from or None
+        changed = True
     if changed:
         home.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
@@ -66,10 +77,35 @@ def _settings(a) -> int:
             "追加の受け口（読むだけ）": [str(x) for x in st.extra_inboxes],
             "ダウンロードの見張り": str(st.downloads_dir) if st.downloads_dir else None,
             "埋め込みモデル": st.embed_model or "（使わない）", "海馬の保持日数": st.hippocampus_days,
+            "毎晩の日報（Codex・Claude Code）": f"{st.daily_logs_since} 以降の会話" if st.daily_logs_since else "作らない",
             "Google ドライブ": str(st.drive_root)})
     if changed:
         print("\n変更しました。常駐している画面には、次に起動したときから反映されます。")
     return 0
+
+
+def _usage(brain, days: int) -> dict:
+    import json
+    from datetime import datetime, timedelta
+
+    path = brain.settings.home / "sleep-usage.jsonl"
+    rows = []
+    if path.exists():
+        since = (datetime.now().astimezone() - timedelta(days=days)).isoformat()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("at", "") >= since:
+                rows.append(r)
+    total = lambda k: sum(r.get(k) or 0 for r in rows)  # noqa: E731
+    return {"期間": f"直近 {days} 日", "睡眠の回数": len(rows),
+            "入力トークン": total("input_tokens"), "出力トークン": total("output_tokens"),
+            "キャッシュ読み込み": total("cache_read_tokens"), "キャッシュ書き込み": total("cache_write_tokens"),
+            "金額の目安（API 料金換算、USD）": round(total("cost_usd"), 2),
+            "注": "Claude のサブスクリプションで動かしている場合、実際の請求ではなく利用枠の消費です。",
+            "各回": rows}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -89,6 +125,12 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--remove-extra-inbox", action="append", default=[])
     s.add_argument("--embed-model", help="Ollama の埋め込みモデル（空文字で意味検索を止める）")
     s.add_argument("--downloads", help="AI 日報を拾うダウンロードフォルダ（空文字で見張らない）")
+    s.add_argument("--daily-logs-from", help="Codex・Claude Code の会話から毎晩日報を作る。この日付以降の会話が対象"
+                                              "（例: 2026-09-27。空文字で止める）")
+
+    sub.add_parser("export", help="大脳皮質の写しを Google ドライブに書き出す（睡眠のたびにも自動で書き出す）")
+    s = sub.add_parser("usage", help="睡眠で使ったトークン数を見る")
+    s.add_argument("--days", type=int, default=7)
 
     s = sub.add_parser("recall", help="思い出す（大脳皮質 → 海馬 → 本棚 → Obsidian）")
     s.add_argument("cue")
@@ -162,6 +204,14 @@ def main(argv: list[str] | None = None) -> int:
                     if not n or not a.all:
                         break
                 print(f"埋め込みを {total} 件作りました。残り {unencoded_count(brain)} 件。")
+            elif a.cmd == "export":
+                from .cortex_export import cortex_root, export
+
+                counts = export(brain)
+                print(f"書き出しました: {cortex_root(brain)}（ルール {counts['procedural']}・事実 {counts['semantic']}"
+                      f"・出来事 {counts['episode']} 件）")
+            elif a.cmd == "usage":
+                _print(_usage(brain, a.days))
             elif a.cmd == "recall":
                 sid = brain.start_session("exobrain CLI")["session_id"]
                 r = brain.recall(sid, a.cue)

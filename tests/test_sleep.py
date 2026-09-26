@@ -85,43 +85,103 @@ def work_through(brain, answer):
     return run_id, seen
 
 
-def test_memo_is_decomposed_and_shelved(brain, session):
+def test_memo_is_promoted_with_a_quote_cut_by_the_program(brain, session):
     memo = brain.add_memo("9/20 打ち合わせ", "写真は全て社内撮影にする\n外部素材は使わない\n")
 
     def answer(item):
-        if item["type"] == "decompose":
-            return {"item_id": item["item_id"], "elements": [
-                {"kind": "procedural", "text": "採用サイトの写真は全て社内撮影", "concepts": ["採用サイト", "写真"]}]}
+        if item["type"] == "promote":
+            assert item["signal"] == "explicit" and item["lines"][0] == [1, "写真は全て社内撮影にする"]
+            return {"item_id": item["item_id"], "atoms": [
+                {"kind": "procedural", "text": "採用サイトの写真は全て社内撮影", "derivation": "paraphrase",
+                 "lines": [1, 2], "confidence": 0.9, "concepts": ["採用サイト", "写真"]}]}
         if item["type"] == "shelve":
             return {"item_id": item["item_id"], "assignments": {s["source_id"]: ["採用サイト"] for s in item["sources"]}}
-        return {"item_id": item["item_id"], "keep": [], "drop": []} if item["type"] == "verify_links" else \
-            {"item_id": item["item_id"], "elements": []}
+        return {"item_id": item["item_id"], "keep": [], "drop": []}
 
     run_id, seen = work_through(brain, answer)
-    assert seen[0] == "decompose" and "shelve" in seen
+    assert seen[0] == "promote" and "shelve" in seen and "decompose" not in seen
     node = brain._conn.execute("SELECT * FROM nodes WHERE source_id = ?", (memo["source_id"],)).fetchone()
-    assert node["created_by"] == "sleep" and node["kind"] == "procedural"
+    assert node["created_by"] == "sleep" and node["kind"] == "procedural" and node["promoted_by"] == "explicit"
+    assert node["derivation"] == "paraphrase" and node["importance"] == 1.0
+    quote = brain._conn.execute("SELECT quote, line_start, line_end FROM node_sources WHERE node_id = ?",
+                                (node["id"],)).fetchone()
+    assert tuple(quote) == ("写真は全て社内撮影にする\n外部素材は使わない", 1, 2)
     fresh = brain.start_session("Codex")["session_id"]
     assert node["id"] in brain.recall(fresh, "採用サイトの写真")["memory_ids"]
     # Nothing is handed out twice.
     assert sleep.next_batch(brain, sleep.SleepState(run_id))["done"]
 
 
-def test_episodes_consolidate_into_a_rule(brain, session):
-    eps = [remember(brain, session, "episode", f"結論を先に書いてと言われた（{i} 回目）", ["文章"]) for i in range(3)]
+def test_verbatim_that_is_not_in_the_original_becomes_paraphrase(brain, session):
+    brain.add_memo("メモ", "- 1回3資料・8チャンクを上限とする。\n")
+    run_id, _ = sleep.start(brain)
+    state = sleep.SleepState(run_id)
+    batch = sleep.next_batch(brain, state)
+    item = next(i for i in batch["items"] if i["type"] == "promote")
+    atoms = [{"kind": "procedural", "text": "1回3資料・8チャンクを上限とする", "derivation": "verbatim", "lines": [1, 1]},
+             {"kind": "procedural", "text": "1回あたも3資料を上限とする", "derivation": "verbatim", "lines": [1, 1]}]
+    sleep.apply(brain, state, batch["batch_id"], [{"item_id": item["item_id"], "atoms": atoms}])
+    got = dict(brain._conn.execute("SELECT body, derivation FROM nodes WHERE kind = 'procedural'").fetchall())
+    assert got == {"1回3資料・8チャンクを上限とする": "verbatim", "1回あたも3資料を上限とする": "paraphrase"}
+
+
+def test_bad_line_numbers_and_unknown_ids_are_refused(brain, session):
+    brain.add_memo("メモ", "一行目\n二行目\n")
+    run_id, _ = sleep.start(brain)
+    state = sleep.SleepState(run_id)
+    batch = sleep.next_batch(brain, state)
+    item = next(i for i in batch["items"] if i["type"] == "promote")
+    for atom, msg in (({"lines": [1, 9]}, "範囲"), ({"same_as": "n_nothere"}, "similar_memories"),
+                      ({"derivation": "guess"}, "derivation")):
+        a = {"kind": "semantic", "text": "x", "derivation": "verbatim", "lines": [1, 1], **atom}
+        with pytest.raises(InvalidInput, match=msg):
+            sleep.apply(brain, state, batch["batch_id"], [{"item_id": item["item_id"], "atoms": [a]}])
+
+
+def test_the_same_thing_again_adds_evidence_instead_of_a_new_memory(brain, session, monkeypatch):
+    # Within one batch the AI cannot see what the other items create; reconcile catches that next night.
+    monkeypatch.setattr(sleep, "BATCH_ITEMS", 1)
+    first = brain.add_memo("a", "資料は PDF で共有する\n")
+    second = brain.add_memo("b", "資料は PDF で共有すること（再確認）\n")
+    existing = {}
 
     def answer(item):
-        if item["type"] == "consolidate":
-            assert {e["id"] for e in item["episodes"]} == set(eps)
-            return {"item_id": item["item_id"], "elements": [
-                {"kind": "procedural", "text": "文章は結論を先に書く", "concepts": ["文章"], "importance": 0.9}]}
-        return {"item_id": item["item_id"], "keep": [], "drop": []} if item["type"] == "verify_links" else \
-            {"item_id": item["item_id"], "elements": []}
+        if item["type"] != "promote":
+            return {"item_id": item["item_id"], "keep": [], "drop": []} if item["type"] == "verify_links" else \
+                {"item_id": item["item_id"], "assignments": {}}
+        if item["source_id"] == first["source_id"]:
+            return {"item_id": item["item_id"], "atoms": [{"kind": "procedural", "text": "資料は PDF で共有する",
+                                                           "derivation": "verbatim", "lines": [1, 1]}]}
+        same = next(m for m in item["similar_memories"] if m["text"] == "資料は PDF で共有する")
+        existing["id"] = same["id"]
+        return {"item_id": item["item_id"], "atoms": [{"kind": "procedural", "text": "資料は PDF で共有する",
+                                                       "derivation": "paraphrase", "lines": [1, 1],
+                                                       "same_as": same["id"]}]}
 
     work_through(brain, answer)
-    rule = brain._conn.execute("SELECT id FROM nodes WHERE body = '文章は結論を先に書く'").fetchone()["id"]
-    assert {e["dst"] for e in brain.edges_of(rule) if e["kind"] == "derived_from"} == set(eps)
-    assert "文章は結論を先に書く" in brain.start_session("Codex")["profile"]
+    assert brain._conn.execute("SELECT COUNT(*) FROM nodes WHERE body = '資料は PDF で共有する'").fetchone()[0] == 1
+    n = brain.node(existing["id"])
+    assert n["occurrences"] == 2
+    assert {r[0] for r in brain._conn.execute("SELECT source_id FROM node_sources WHERE node_id = ?", (n["id"],))} \
+        == {first["source_id"], second["source_id"]}
+
+
+def test_daily_log_sections_decide_what_is_a_candidate(brain, session):
+    brain.submit_daily_log(session, "相談", ["雑談した"], ["結論から書くよう注意された"], [], ["md は写し"], [])
+    run_id, _ = sleep.start(brain)
+    batch = sleep.next_batch(brain, sleep.SleepState(run_id))
+    promoted = [i for i in batch["items"] if i["type"] == "promote"]
+    texts = ["\n".join(t for _, t in i["lines"]) for i in promoted]
+    assert len(promoted) == 2 and all(i["signal"] == "explicit" for i in promoted)
+    assert any("注意された" in t for t in texts) and any("写し" in t for t in texts)
+    assert not any("雑談" in t for t in texts)  # events are promoted only when they repeat
+
+
+def test_no_lessons_are_made_without_the_owner(brain, session):
+    for i in range(3):
+        remember(brain, session, "episode", f"結論を先に書いてと言われた（{i} 回目）", ["文章"])
+    _, seen = work_through(brain, lambda item: {"item_id": item["item_id"], "keep": [], "drop": []})
+    assert "consolidate" not in seen
 
 
 def test_near_duplicates_are_reconciled(brain, session):
@@ -262,3 +322,6 @@ def test_sleep_through_claude_code(brain, settings, session, tmp_path):
     assert "テストの夢を見ました。" in journal and "資料は PDF で共有する" in journal
     assert brain._conn.execute("SELECT COUNT(*) FROM shelves WHERE shelf = 'テスト棚'").fetchone()[0] >= 1
     assert brain.verify()[0]
+    assert out["usage"]["output_tokens"] == 200 and out["usage"]["cost_usd"] == 0.12
+    copy = settings.drive_root / "大脳皮質"
+    assert (copy / "大脳皮質.md").exists() and any((copy / "手続き記憶").glob("資料は PDF で共有する__*.md"))

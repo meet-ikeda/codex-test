@@ -320,6 +320,13 @@ def doctor(settings: Settings, home: Path, brain=None) -> Report:
     if brain is not None:
         claude = find_claude(brain)
         r.add("ok" if claude else "warn", "Claude Code（AI による睡眠）", claude or "見つかりません")
+        if claude:
+            from .sleep import claude_logged_in
+
+            logged = claude_logged_in(claude)
+            r.add({True: "ok", False: "warn", None: "warn"}[logged], "Claude Code のログイン",
+                  {True: "ログイン済み", False: "ログインしていません。ターミナルで claude auth login を実行してください",
+                   None: "確かめられませんでした"}[logged])
         ok, msg = brain.verify()
         r.add("ok" if ok else "fail", "改ざんチェック", msg)
         r.add("ok", "FTS5 secure-delete", "有効" if brain.fts_secure_delete else "使えない（代わりに索引を作り直す）")

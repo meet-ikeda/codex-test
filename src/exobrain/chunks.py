@@ -29,7 +29,8 @@ class Chunk:
     text: str
 
 
-def chunk_document(body: str, max_chars: int = MAX_CHARS) -> list[Chunk]:
+def chunk_document(body: str, max_chars: int = MAX_CHARS, every_heading: bool = False) -> list[Chunk]:
+    """every_heading: cut at each heading whatever the size (AI daily logs: one section, one chunk)."""
     if not body.strip():
         return []
     lines: list[tuple[str, int]] = []  # (text with its line ending, offset)
@@ -57,7 +58,8 @@ def chunk_document(body: str, max_chars: int = MAX_CHARS) -> list[Chunk]:
 
     for i, (text, _) in enumerate(lines):
         is_heading = bool(_HEADING.match(text))
-        if i > start_line and (size + len(text) > max_chars or (is_heading and size >= max_chars / 2)):
+        if i > start_line and (size + len(text) > max_chars
+                               or (is_heading and (every_heading or size >= max_chars / 2))):
             flush(i)
         size += len(text)
         if len(text) > max_chars:

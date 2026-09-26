@@ -4,7 +4,11 @@
 const TOKEN = document.body.dataset.token;
 const KIND_JA = { episode: "出来事", semantic: "知識", procedural: "ルール", concept: "概念" };
 const KIND_EN = { episode: "Episode", semantic: "Knowledge", procedural: "Rule", concept: "Concept" };
-const SOURCE_KIND = { memo: "Your note", daily_report: "AI report", dream: "Dream journal" };
+const SOURCE_KIND = { memo: "Your note", daily_report: "AI report", dream: "Dream journal", ai_daily: "AI daily log",
+  remember_note: "#remember note", explicit: "Remember this", good: "/good" };
+const SOURCE_JA = { memo: "メモ", daily_report: "AI の報告（旧）", dream: "夢日記", ai_daily: "AI 日報",
+  remember_note: "#remember", explicit: "覚えておいて", good: "/good" };
+const PROMOTED_JA = { explicit: "明示", demand: "前にも言った", repetition: "反復", association: "連想" };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const $ = (sel) => document.querySelector(sel);
 
@@ -27,6 +31,12 @@ function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (k === "class") node.className = v;
+    else if (k === "style") { // CSP forbids style attributes; the CSSOM is allowed
+      for (const decl of String(v).split(";")) {
+        const i = decl.indexOf(":");
+        if (i > 0) node.style.setProperty(decl.slice(0, i).trim(), decl.slice(i + 1).trim());
+      }
+    }
     else if (k === "on") for (const [ev, fn] of Object.entries(v)) node.addEventListener(ev, fn);
     else if (v !== undefined && v !== null && v !== false) node.setAttribute(k, v === true ? "" : v);
   }
@@ -475,22 +485,55 @@ $("#s-search").addEventListener("input", () => {
 });
 loaders.shelf = loadShelves;
 
-// ---- memo -------------------------------------------------------------------------
+// ---- brain: receiving box → hippocampus → cortex, bookshelf -----------------------
 
-$("#memo-text").addEventListener("input", () => { $("#memo-count").textContent = $("#memo-text").value.length.toLocaleString(); });
-$("#memo-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
+const li = (attrs, ...children) => el("li", attrs, ...children);
+const t = (text) => el("span", { class: "t" }, text);
+const m = (text) => el("span", { class: "m" }, text);
+
+async function loadBrain() {
   await guarded(async () => {
-    const r = await api("/api/memo", { title: $("#memo-title").value, text: $("#memo-text").value });
-    if (r.duplicate) return toast("同じメモがすでに本棚にあります。");
-    $("#memo-title").value = "";
-    $("#memo-text").value = "";
-    $("#memo-count").textContent = "0";
-    G.data = null; // refresh next time
-    loadMeta();
-    toast(`「${r.title}」を本棚に保管しました。次の睡眠で記憶に分解されます。`);
+    const b = await api("/api/brain");
+    // A. receiving box
+    $("#c-inbox").textContent = pad(b.inbox.length, 2);
+    $("#l-inbox").replaceChildren(...(b.inbox.length ? b.inbox.map((x) => li({},
+      t(x.name), x.needs_check ? m(`確認が必要: ${x.reason || ""}`) : m("まもなく取り込みます"))) :
+      [li({ class: "empty" }, "空です。届いたものはすぐ海馬へ移ります。")]));
+    $("#l-inbox").querySelectorAll(".m").forEach((n) => { if (n.textContent.startsWith("確認")) n.classList.add("bad"); });
+    // B. hippocampus
+    $("#c-hippo").textContent = pad(b.hippocampus.length, 2);
+    $("#l-hippo").replaceChildren(...(b.hippocampus.length ? b.hippocampus.map((h) => {
+      const left = Math.max(0, Math.min(1, h.days_left / h.days_total));
+      const sigs = h.signals.map((s) => el("span", { class: "sig" }, PROMOTED_JA[s] || s));
+      if (h.memories) sigs.push(el("span", { class: "sig soft" }, `記憶 ${h.memories}`));
+      return li({ class: "clickable", on: { click: () => openSource(h.id) } },
+        t(h.title), m(`${SOURCE_JA[h.kind] || h.kind} · ${h.writer} · あと ${h.days_left} 日`),
+        sigs.length ? el("span", { class: "m" }, ...sigs) : null,
+        el("div", { class: "fade", title: `消えるまで あと ${h.days_left} 日` }, el("i", { style: `width:${left * 100}%` })));
+    }) : [li({ class: "empty" }, "いま海馬にある情報はありません。")]));
+    // C. cortex
+    const k = b.cortex.kinds;
+    $("#c-cortex").textContent = pad(k.procedural + k.semantic + k.episode, 2);
+    $("#cortex-kinds").textContent = `ルール・やり方 ${k.procedural} · 事実・決定 ${k.semantic} · 出来事 ${k.episode}。濃いものほど強い記憶。`;
+    const top = b.cortex.memories;
+    const maxS = Math.max(0.01, ...top.map((n) => n.importance * n.base_strength + 0.1 * (n.goods + n.corrections)));
+    $("#l-cortex").replaceChildren(...(top.length ? top.map((n) => {
+      const strength = (n.importance * n.base_strength + 0.1 * (n.goods + n.corrections)) / maxS;
+      const bits = [KIND_JA[n.kind], n.promoted_by ? `${PROMOTED_JA[n.promoted_by] || n.promoted_by}で記憶` : null,
+        n.goods ? `褒められた ${n.goods}` : null, n.corrections ? `注意された ${n.corrections}` : null,
+        n.occurrences > 1 ? `再登場 ${n.occurrences}` : null, n.pinned ? "固定" : null].filter(Boolean);
+      return li({ class: "clickable", style: `opacity:${(0.35 + 0.65 * strength).toFixed(2)}`,
+        on: { click: () => { showTab("graph"); setTimeout(() => selectNode(n.id), 400); } } }, t(n.body), m(bits.join(" · ")));
+    }) : [li({ class: "empty" }, "まだ記憶はありません。今夜の睡眠で、海馬から移ってきます。")]));
+    // D. bookshelf
+    const shelf = Object.entries(b.bookshelf);
+    $("#c-shelf").textContent = pad(shelf.reduce((a, [, n]) => a + n, 0), 2);
+    $("#l-shelf").replaceChildren(...shelf.sort((a, b2) => b2[1] - a[1]).map(([kind, n]) => li({}, t(`${SOURCE_JA[kind] || kind}  ${n}`))));
+    $("#flow-foot").textContent = `この7日間: 届いた資料 ${b.flow.received} · 大脳皮質に移った記憶 ${b.flow.promoted} · 海馬から薄れた情報（累計） ${b.flow.faded}`;
   });
-});
+}
+$("#to-shelf").addEventListener("click", () => showTab("shelf"));
+loaders.brain = loadBrain;
 
 // ---- sleep -------------------------------------------------------------------------
 
@@ -510,6 +553,11 @@ async function loadSleep() {
     const hhmm = s.timer ? `${pad(s.timer.hour, 2)}:${pad(s.timer.minute, 2)}` : null;
     $("#timer-status").textContent = hhmm ? `Every day at ${hhmm}` : "Timer off — タイマーは切れています";
     if (hhmm) $("#timer-time").value = hhmm;
+    $("#usage").replaceChildren(...(s.usage || []).map((u, i) => el("li", {},
+      el("span", { class: "n" }, `No. ${pad(i + 1)}`),
+      el("span", {}, `${when(u.at)} — 入力 ${(u.input_tokens + u.cache_read_tokens + u.cache_write_tokens).toLocaleString()}・出力 ${u.output_tokens.toLocaleString()} トークン`
+        + (u.cost_usd != null ? `（目安 $${u.cost_usd.toFixed(2)}）` : "") + (u.seconds ? `・${Math.round(u.seconds / 60)} 分` : "")))));
+    if (!(s.usage || []).length) $("#usage").append(el("li", { class: "muted" }, "まだ記録はありません（次の AI による睡眠から記録します）"));
     $("#dreams").replaceChildren(...s.dreams.map((d, i) => el("li", { class: "clickable", on: { click: () => openSource(d.id) } },
       el("span", { class: "n" }, `No. ${pad(s.dreams.length - i)}`), el("span", { class: "title" }, d.title),
       el("span", { class: "meta" }, `Dream journal — ${when(d.created_at)}`))));
@@ -627,4 +675,4 @@ loaders.safety = loadSafety;
 // ---- start ---------------------------------------------------------------------------
 
 loadMeta();
-showTab("graph");
+showTab("brain");

@@ -133,6 +133,20 @@ exobrain open
 
 Ollama が止まっていても exobrain は動きます（文字の一致だけで探します）。
 
+4. 毎晩の睡眠で AI（Claude Code）を使うため、コマンド版の Claude Code にログインしておく。`exobrain doctor` の「Claude Code のログイン」が ✓ なら済んでいます
+
+   ```bash
+   claude auth login
+   ```
+
+5. Codex・Claude Code の会話から毎晩日報を作るなら、どの日以降の会話を対象にするかを決める（決めるまでは作りません）
+
+   ```bash
+   exobrain settings --daily-logs-from 2026-09-27
+   ```
+
+チャットでの合図: 「覚えておいて」でその場で記憶、`/日報` でその会話の日報、`/good` で褒めたやり方を記憶して、使った記憶を強めます。
+
 ---
 
 ## 実地確認のチェックリスト（要件定義書 9 章の受け入れ基準）

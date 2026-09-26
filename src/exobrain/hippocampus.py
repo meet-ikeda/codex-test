@@ -105,6 +105,12 @@ class ChunkIndex:
         return {self.ids[i]: float(sims[i]) for i in top}
 
 
+def embed_input(heading: str, text: str) -> str:
+    """What a chunk is embedded as: its text, with the heading in front only if the text does not start with it."""
+    text = text.strip()
+    return text if not heading or text.startswith("#") else f"{heading}\n{text}"
+
+
 def encode_pending(brain: Brain, limit: int = 200) -> int:
     """Embed chunks that have no vector for the current model yet. Returns how many were embedded."""
     emb = brain.embedder
@@ -120,7 +126,7 @@ def encode_pending(brain: Brain, limit: int = 200) -> int:
             brain._conn.execute("DELETE FROM chunk_vectors WHERE chunk_id NOT IN (SELECT id FROM chunks)")
         return 0
     try:
-        vecs = emb.embed([(r["heading"] + "\n" + r["text"]).strip() for r in rows])
+        vecs = emb.embed([embed_input(r["heading"], r["text"]) for r in rows])
     except EmbedUnavailable:
         return 0
     with brain._lock:

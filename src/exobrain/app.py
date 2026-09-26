@@ -191,7 +191,19 @@ class App:
             "SELECT id, title, created_at FROM sources WHERE kind = 'dream' ORDER BY created_at DESC LIMIT 30")]
         return {**self.sleep_state, "last_sleep": last.isoformat() if last else None,
                 "due": sleep.is_due(self.brain), "dreams": dreams, "timer": self._config().get("sleep_timer"),
-                "claude_found": sleep.find_claude(self.brain) is not None}
+                "claude_found": sleep.find_claude(self.brain) is not None, "usage": self._recent_usage()}
+
+    def _recent_usage(self) -> list[dict]:
+        path = self.brain.settings.home / "sleep-usage.jsonl"
+        if not path.exists():
+            return []
+        rows = []
+        for line in path.read_text(encoding="utf-8").splitlines()[-7:]:
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+        return rows[::-1]
 
     def set_timer(self, body: dict) -> dict[str, Any]:
         cfg = self._config()
@@ -242,9 +254,63 @@ class App:
             raise InvalidInput("そのバックアップは見つかりません。")
         return safety.restore(self.brain, names[body["name"]])
 
+    # ---- the brain at a glance (spec v0.5 §10) ----------------------------------------
+
+    def brain_overview(self) -> dict[str, Any]:
+        from datetime import datetime, timedelta, timezone
+
+        from .inbox import pending_inbox
+        from .promote import candidates
+
+        b, c = self.brain, self.brain._conn
+        now = datetime.now(timezone.utc)
+        week = (now - timedelta(days=7)).isoformat()
+        with b._lock:
+            promoted_keys = [r[0] for r in c.execute("SELECT key FROM sleep_marks WHERE kind = 'promoted'")]
+            waiting_signals: dict[str, set[str]] = {}
+            try:
+                for seg, _ in candidates(b, set(promoted_keys)):
+                    waiting_signals.setdefault(seg.source_id, set()).add(seg.signal)
+            except Exception:  # noqa: BLE001 — the overview must not fail because of Ollama
+                pass
+            hippo = []
+            for r in c.execute(
+                    "SELECT s.id, s.title, s.kind, s.author, s.ai_name, h.entered_at, h.expires_at,"
+                    " (SELECT COUNT(*) FROM chunks WHERE source_id = s.id) AS chunks,"
+                    " (SELECT COUNT(*) FROM node_sources WHERE source_id = s.id) AS memories"
+                    " FROM hippocampus h JOIN sources s ON s.id = h.source_id WHERE h.status = 'waiting'"
+                    " ORDER BY h.entered_at DESC"):
+                left = (datetime.fromisoformat(r["expires_at"]) - now).total_seconds() / 86400
+                hippo.append({"id": r["id"], "title": r["title"], "kind": r["kind"],
+                              "writer": r["ai_name"] if r["author"] == "ai" else "オーナー",
+                              "entered_at": r["entered_at"], "days_left": round(max(0.0, left), 1),
+                              "days_total": b.settings.hippocampus_days,
+                              "signals": sorted(waiting_signals.get(r["id"], set())),
+                              "memories": r["memories"], "chunks": r["chunks"]})
+            kinds = {k: c.execute("SELECT COUNT(*) FROM nodes WHERE kind = ? AND status = 'active'", (k,)).fetchone()[0]
+                     for k in ("procedural", "semantic", "episode")}
+            memories = [dict(r) for r in c.execute(
+                "SELECT id, kind, body, promoted_by, importance, base_strength, goods, corrections, occurrences,"
+                " pinned, created_at, access_count FROM nodes WHERE status = 'active'"
+                " AND kind IN ('procedural', 'semantic', 'episode')"
+                " ORDER BY pinned DESC, importance * base_strength + 0.1 * goods + 0.1 * corrections DESC,"
+                " created_at DESC LIMIT 40")]
+            shelf = {r[0]: r[1] for r in c.execute("SELECT kind, COUNT(*) FROM sources WHERE erased = 0 GROUP BY kind")}
+            flow = {
+                "received": c.execute("SELECT COUNT(*) FROM sources WHERE created_at >= ? AND kind != 'dream'",
+                                      (week,)).fetchone()[0],
+                "promoted": c.execute("SELECT COUNT(*) FROM nodes WHERE created_at >= ? AND kind != 'concept'",
+                                      (week,)).fetchone()[0],
+                "faded": c.execute("SELECT COUNT(*) FROM hippocampus WHERE status = 'faded'").fetchone()[0],
+            }
+        return {"inbox": pending_inbox(b), "hippocampus": hippo, "cortex": {"kinds": kinds, "memories": memories},
+                "bookshelf": shelf, "flow": flow}
+
     # ---- routing -----------------------------------------------------------------------
 
     def get(self, path: str, q: dict[str, str]) -> Any:
+        if path == "/api/brain":
+            return self.brain_overview()
         if path == "/api/graph":
             return self.graph(q)
         if path.startswith("/api/node/"):

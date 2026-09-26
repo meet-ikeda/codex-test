@@ -12,9 +12,9 @@
 <header class="bar">
   <div class="brand"><span class="mark">exobrain</span><span class="sub">外部脳</span></div>
   <nav class="tabs" role="tablist" aria-label="セクション">
-    <button role="tab" data-tab="graph" aria-selected="true"><span class="num">01</span>Graph</button>
-    <button role="tab" data-tab="shelf"><span class="num">02</span>Bookshelf</button>
-    <button role="tab" data-tab="memo"><span class="num">03</span>Memo</button>
+    <button role="tab" data-tab="brain" aria-selected="true"><span class="num">01</span>Brain</button>
+    <button role="tab" data-tab="graph"><span class="num">02</span>Cortex</button>
+    <button role="tab" data-tab="shelf"><span class="num">03</span>Bookshelf</button>
     <button role="tab" data-tab="sleep"><span class="num">04</span>Sleep</button>
     <button role="tab" data-tab="safety"><span class="num">05</span>Safety</button>
   </nav>
@@ -29,15 +29,59 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-<!-- 01 GRAPH -->
-<main id="tab-graph" class="tab tab-graph">
+<!-- 01 BRAIN: the four places information passes through -->
+<main id="tab-brain" class="tab page wide">
+  <header class="room-head">
+    <p class="room">Room 01</p>
+    <h1 class="display">From record to memory.</h1>
+    <p class="lede">届いた資料は海馬にしばらく留まり、眠るたびに大事なものだけが大脳皮質に移ります。移らなかったものは海馬から薄れて消えますが、原文は本棚に残ります。</p>
+  </header>
+  <div class="flow" id="flow">
+    <section class="zone" id="z-inbox">
+      <p class="room">A. Receiving</p>
+      <h2 class="zone-name">預かりBOX</h2>
+      <p class="zone-count"><b id="c-inbox">—</b></p>
+      <p class="hint">届いたばかりで、まだ確かめていないもの。#remember のノート、AI の日報。</p>
+      <ol class="plain zone-list" id="l-inbox"></ol>
+    </section>
+    <div class="arrow" aria-hidden="true"><span>確かめる</span></div>
+    <section class="zone" id="z-hippo">
+      <p class="room">B. Hippocampus</p>
+      <h2 class="zone-name">海馬</h2>
+      <p class="zone-count"><b id="c-hippo">—</b></p>
+      <p class="hint">一時的な記憶。線は消えるまでの残り日数。印のあるものが今夜の昇格の候補です。</p>
+      <ol class="plain zone-list" id="l-hippo"></ol>
+    </section>
+    <div class="arrow" aria-hidden="true"><span>眠って移る</span></div>
+    <section class="zone zone-cortex" id="z-cortex">
+      <p class="room">C. Cortex</p>
+      <h2 class="zone-name">大脳皮質</h2>
+      <p class="zone-count"><b id="c-cortex">—</b></p>
+      <p class="hint" id="cortex-kinds"></p>
+      <ol class="plain zone-list" id="l-cortex"></ol>
+    </section>
+    <div class="arrow arrow-down" aria-hidden="true"><span>原文はすべて</span></div>
+    <section class="zone zone-shelf" id="z-shelf">
+      <p class="room">D. Bookshelf</p>
+      <h2 class="zone-name">本棚</h2>
+      <p class="zone-count"><b id="c-shelf">—</b></p>
+      <p class="hint">脳の外の記録。一字も変えずに残し、すべての記憶はここへたどれます。</p>
+      <ul class="plain zone-list" id="l-shelf"></ul>
+      <button class="link cap" id="to-shelf">本棚を開く →</button>
+    </section>
+  </div>
+  <p class="flow-foot cap" id="flow-foot"></p>
+</main>
+
+<!-- 02 CORTEX: the galaxy -->
+<main id="tab-graph" class="tab tab-graph" hidden>
   <div id="graph" class="graph-stage" aria-label="記憶の銀河"></div>
   <div id="g-labels" class="g-labels" aria-hidden="true"></div>
   <div id="g-caption" class="g-caption" hidden></div>
 
   <div class="g-title">
-    <p class="room">Room 01</p>
-    <h1 class="display">The web of memory</h1>
+    <p class="room">Room 02</p>
+    <h1 class="display">The cortex</h1>
     <p class="lede">ひとつひとつの記憶は粒子の集まり。よく思い出すものほど濃く、つながりは細い線で結ばれています。</p>
   </div>
 
@@ -93,7 +137,7 @@
 <!-- 02 BOOKSHELF -->
 <main id="tab-shelf" class="tab page" hidden>
   <header class="room-head">
-    <p class="room">Room 02</p>
+    <p class="room">Room 03</p>
     <h1 class="display">The Bookshelf</h1>
     <p class="lede">記憶のもとになった原文。一字も書き換えられることなく、そのまま保管されています。</p>
   </header>
@@ -116,20 +160,6 @@
       <p class="hint">原文を選ぶと、ここに原文のまま表示されます。</p>
     </article>
   </div>
-</main>
-
-<!-- 03 MEMO -->
-<main id="tab-memo" class="tab page narrow" hidden>
-  <header class="room-head">
-    <p class="room">Room 03</p>
-    <h1 class="display">Hand me a note.</h1>
-    <p class="lede">渡したメモは原文のまま本棚に保管され、次の睡眠で記憶に分解されます。Google ドライブの「受け取り箱」にファイル（.md / .txt）を置いても同じです。</p>
-  </header>
-  <form id="memo-form" class="memo">
-    <label class="field-block"><span class="cap">Title — 題名</span><input id="memo-title" class="field big" required maxlength="100" placeholder="例: 9/20 打ち合わせ"></label>
-    <label class="field-block"><span class="cap">Text — 本文 <span class="count"><span id="memo-count">0</span> characters</span></span><textarea id="memo-text" class="field sheet" required rows="14" placeholder="ここに貼り付け"></textarea></label>
-    <div><button type="submit" class="btn">本棚に渡す</button></div>
-  </form>
 </main>
 
 <!-- 04 SLEEP -->
@@ -163,7 +193,14 @@
     </div>
   </section>
   <section class="plate">
-    <p class="cap">III. Dream journal</p>
+    <p class="cap">III. Usage</p>
+    <div>
+      <p class="hint">睡眠で Claude Code が使った量（直近7回）。サブスクリプションで動かしている場合、金額は API 料金に換算した目安で、実際の請求ではありません。</p>
+      <ol id="usage" class="plain index-list"></ol>
+    </div>
+  </section>
+  <section class="plate">
+    <p class="cap">IV. Dream journal</p>
     <ol id="dreams" class="plain index-list"></ol>
   </section>
 </main>

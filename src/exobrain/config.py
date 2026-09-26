@@ -42,6 +42,11 @@ class Settings:
     embed_model: str = DEFAULT_EMBED_MODEL
     ollama_url: str = DEFAULT_OLLAMA_URL
     hippocampus_days: int = HIPPOCAMPUS_DAYS
+    # Nightly AI daily logs from conversations kept on this Mac (spec v0.5 §5.2). Off until the owner
+    # says from when (ISO date), so the first night does not read years of history.
+    daily_logs_since: str | None = None
+    codex_sessions: Path | None = None
+    claude_projects: Path | None = None
 
     @property
     def db_path(self) -> Path:
@@ -90,4 +95,7 @@ def load_settings() -> Settings:
         embed_model=os.environ.get("EXOBRAIN_EMBED_MODEL", cfg.get("embed_model", DEFAULT_EMBED_MODEL)),
         ollama_url=cfg.get("ollama_url", DEFAULT_OLLAMA_URL),
         hippocampus_days=int(cfg.get("hippocampus_days", HIPPOCAMPUS_DAYS)),
+        daily_logs_since=cfg.get("daily_logs_since"),
+        codex_sessions=path_or_none(cfg.get("codex_sessions", "~/.codex/sessions")),
+        claude_projects=path_or_none(cfg.get("claude_projects", "~/.claude/projects")),
     )

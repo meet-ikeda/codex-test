@@ -20,7 +20,8 @@
 | M5 | 画面（`exobrain app`）: グラフ・本棚・メモ・睡眠ボタンとタイマー・安全装置 | ✅ |
 | M6 | Mac への導入（`exobrain install` / `doctor` / `uninstall` / `open`）と実地確認 | ✅（2026-09-26 に導入） |
 | v0.5 第1区切り | 預かりBOX（`#remember` の見張り、AI 日報 形式 v1、ダウンロードの見張り、追加の受け口）、海馬と本棚の索引（チャンク・bge-m3 の意味検索）、段階的な想起（大脳皮質 → 海馬 → 本棚 → Obsidian → 記録なし）、`remember_explicit` / `submit_daily_log`。AI が自分の判断で大脳皮質に書く道具（`remember` / `submit_daily_report`）は廃止 | ✅ |
-| v0.5 第2区切り | 睡眠A（昇格）、即時レーン（`/good`）、画面の4区分、大脳皮質の Google ドライブへの書き出し、Codex・Claude Code の日報の自動作成 | これから |
+| v0.5 第2区切り | 睡眠A（明示・反復の信号で昇格。引用はプログラムが原文から切り出す。重複は出典を足す）、`/good`、画面の4区分（01 Brain）、大脳皮質の Google ドライブへの書き出し（写し）、Codex・Claude Code の会話から毎晩の日報、大脳皮質の意味による想起、睡眠のトークン記録（`exobrain usage`） | ✅ |
+| v0.5 第3区切り | 睡眠B（連想）、重みの本格運用、忘却、画面の脳らしい動き、意外な結びつき、スマホからの入口 | これから |
 
 ## データの置き場所
 
@@ -41,6 +42,9 @@ exobrain ingest    # 預かりBOX と Obsidian の #remember を取り込む（�
 exobrain encode --all   # 意味検索の埋め込みを作る（Ollama の bge-m3）
 exobrain recall "話題"  # 思い出す（大脳皮質 → 海馬 → 本棚 → Obsidian）
 exobrain settings --vault <保管庫> --add-extra-inbox <フォルダ> --embed-model bge-m3
+exobrain settings --daily-logs-from 2026-09-27   # この日以降の Codex・Claude Code の会話から毎晩日報を作る
+exobrain export   # 大脳皮質の写しを Google ドライブへ（睡眠のたびにも自動）
+exobrain usage    # 睡眠で使ったトークン数
 exobrain memo 題名 < メモ.md
 exobrain search 語句
 exobrain sleep [--if-due] [--no-ai]   # 睡眠（AI による整理は Claude Code を使う）

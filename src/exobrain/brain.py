@@ -39,6 +39,11 @@ RECALL_BUDGET = 1500
 RECALL_BUDGET_RANGE = (300, 4000)
 RECALL_HEBBIAN_RATE = 0.05  # weaker than confirmed use (HEBBIAN_RATE)
 RECALL_REINFORCE_TOP = 5
+GOOD_IMPORTANCE_STEP = 0.15  # /good: how much a used memory's importance rises (spec v0.5 §7.3)
+GOOD_HEBBIAN_RATE = 0.3  # /good wires used memories together much harder than plain recall (0.05)
+NODE_SEED_MIN = 0.5  # bge-m3 cosine: a cortex memory this close to the cue starts the spreading (provisional)
+NODE_FOUND_MIN = 0.62  # ...and this close counts as the cortex having answered (no need to look further)
+NODE_SEEDS_MAX = 20
 FALLBACK_KEEP = 0.6  # share of the recall budget the cortex keeps when records are looked up too
 
 ELEMENT_KINDS = ("episode", "semantic", "procedural")
@@ -58,7 +63,11 @@ CREATE TABLE IF NOT EXISTS nodes (
     status TEXT NOT NULL DEFAULT 'active',
     corrections INTEGER NOT NULL DEFAULT 0,  -- times the owner had to point this out again
     pinned INTEGER NOT NULL DEFAULT 0,        -- always included in recall (standing rule)
-    promoted_by TEXT                          -- explicit | demand | repetition | association (spec v0.5 §5)
+    promoted_by TEXT,                         -- explicit | demand | repetition | association (spec v0.5 §5)
+    derivation TEXT,                          -- verbatim | paraphrase | inferred (OUTBRAIN v0.4 §4.3)
+    confidence REAL,
+    occurrences INTEGER NOT NULL DEFAULT 1,   -- seen again in another source on another day
+    goods INTEGER NOT NULL DEFAULT 0          -- times the owner sent /good for an answer that used it
 );
 CREATE UNIQUE INDEX IF NOT EXISTS nodes_concept_norm ON nodes(norm) WHERE kind = 'concept';
 CREATE INDEX IF NOT EXISTS nodes_kind ON nodes(kind, status);
@@ -110,13 +119,22 @@ CREATE TABLE IF NOT EXISTS ai_checkpoints (
     key TEXT PRIMARY KEY, source TEXT NOT NULL, thread_id TEXT NOT NULL, cursor TEXT NOT NULL,
     entry_date TEXT, source_id TEXT, at TEXT NOT NULL
 );
+-- Where each memory came from: quote cut by the program from the original, with its lines.
+CREATE TABLE IF NOT EXISTS node_sources (
+    node_id TEXT NOT NULL, source_id TEXT NOT NULL, line_start INTEGER, line_end INTEGER, quote TEXT NOT NULL,
+    at TEXT NOT NULL, PRIMARY KEY (node_id, source_id, line_start)
+);
+CREATE TABLE IF NOT EXISTS node_vectors (
+    node_id TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (node_id, model)
+);
 -- Embedding cache. Not a projection: rebuild() keeps it, and it can be recomputed from chunks.
 CREATE TABLE IF NOT EXISTS chunk_vectors (
     chunk_id TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (chunk_id, model)
 );
 """
 PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions", "session_items", "source_fts", "shelves",
-                     "sleep_runs", "sleep_marks", "chunks", "chunk_fts", "hippocampus", "ai_checkpoints")
+                     "sleep_runs", "sleep_marks", "chunks", "chunk_fts", "hippocampus", "ai_checkpoints",
+                     "node_sources")
 
 
 class InvalidInput(ValueError):
@@ -218,20 +236,22 @@ class Brain:
         for col in ("corrections", "pinned"):
             if col not in cols:
                 self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
-        if "promoted_by" not in cols:
-            self._conn.execute("ALTER TABLE nodes ADD COLUMN promoted_by TEXT")
+        for col, decl in (("promoted_by", "TEXT"), ("derivation", "TEXT"), ("confidence", "REAL"),
+                          ("occurrences", "INTEGER NOT NULL DEFAULT 1"), ("goods", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {decl}")
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(sources)")}
         for col in ("origin_file", "meta_json"):
             if col not in cols:
                 self._conn.execute(f"ALTER TABLE sources ADD COLUMN {col} TEXT")
         # Sources filed before chunks existed: chunk them now (derived data, no events needed).
         missing = self._conn.execute(
-            "SELECT id, path FROM sources WHERE erased = 0 AND id NOT IN (SELECT DISTINCT source_id FROM chunks)"
+            "SELECT id, path, kind FROM sources WHERE erased = 0 AND id NOT IN (SELECT DISTINCT source_id FROM chunks)"
         ).fetchall()
         for r in missing:
             path = self.settings.drive_root / r["path"]
             if path.exists():
-                self._index_chunks(r["id"], read_body(path))
+                self._index_chunks(r["id"], read_body(path), r["kind"])
 
     def _enable_fts_secure_delete(self) -> bool:
         """FTS5 secure-delete (SQLite 3.42+) removes forensic traces from the index on delete."""
@@ -300,7 +320,13 @@ class Brain:
             path = self.settings.drive_root / p["path"]
             body = read_body(path) if path.exists() else ""
             c.execute("INSERT INTO source_fts (source_id, title, body) VALUES (?, ?, ?)", (p["id"], p["title"], body))
-            self._index_chunks(p["id"], body)
+            self._index_chunks(p["id"], body, p["kind"])
+        elif ev.type == "node_sourced":
+            c.execute("INSERT OR IGNORE INTO node_sources (node_id, source_id, line_start, line_end, quote, at)"
+                      " VALUES (?, ?, ?, ?, ?, ?)",
+                      (p["node_id"], p["source_id"], p.get("line_start"), p.get("line_end"), p["quote"], ev.at))
+            if p.get("occurrence"):
+                c.execute("UPDATE nodes SET occurrences = occurrences + 1 WHERE id = ?", (p["node_id"],))
         elif ev.type == "hippocampus_entered":
             c.execute("INSERT OR IGNORE INTO hippocampus (source_id, entered_at, expires_at) VALUES (?, ?, ?)",
                       (p["source_id"], ev.at, p["expires_at"]))
@@ -316,9 +342,10 @@ class Brain:
         elif ev.type == "node_added":
             c.execute(
                 "INSERT INTO nodes (id, kind, label, body, norm, source_id, created_by, created_at, importance,"
-                " promoted_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " promoted_by, derivation, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (p["id"], p["kind"], p["label"], p.get("body"), p.get("norm"), p.get("source_id"),
-                 ev.actor, ev.at, p.get("importance", 0.5), p.get("promoted_by")),
+                 ev.actor, ev.at, p.get("importance", 0.5), p.get("promoted_by"), p.get("derivation"),
+                 p.get("confidence")),
             )
         elif ev.type == "edge_set":
             c.execute(
@@ -347,10 +374,13 @@ class Brain:
             c.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (ev.at, p["session_id"]))
         elif ev.type == "node_updated":
             sets, args = [], []
-            for col in ("base_strength", "pinned", "status"):
+            for col in ("base_strength", "pinned", "status", "importance"):
                 if col in p:
                     sets.append(f"{col} = ?")
                     args.append(p[col])
+            if p.get("goods_delta"):
+                sets.append("goods = goods + ?")
+                args.append(p["goods_delta"])
             if p.get("corrections_delta"):
                 sets.append("corrections = corrections + ?")
                 args.append(p["corrections_delta"])
@@ -365,11 +395,14 @@ class Brain:
                           (p["id"],))
                 c.execute("DELETE FROM chunks WHERE source_id = ?", (p["id"],))
                 c.execute("DELETE FROM hippocampus WHERE source_id = ?", (p["id"],))
+                c.execute("DELETE FROM node_sources WHERE source_id = ?", (p["id"],))
                 c.execute("DELETE FROM sources WHERE id = ?", (p["id"],))
                 c.execute("DELETE FROM shelves WHERE source_id = ?", (p["id"],))
                 c.execute("DELETE FROM source_fts WHERE source_id = ?", (p["id"],))
             else:
                 c.execute("DELETE FROM nodes WHERE id = ?", (p["id"],))
+                c.execute("DELETE FROM node_sources WHERE node_id = ?", (p["id"],))
+                c.execute("DELETE FROM node_vectors WHERE node_id = ?", (p["id"],))
                 c.execute("DELETE FROM edges WHERE src = ? OR dst = ?", (p["id"], p["id"]))
                 c.execute("DELETE FROM session_items WHERE node_id = ?", (p["id"],))
         elif ev.type == "shelf_assigned":
@@ -394,10 +427,10 @@ class Brain:
         else:
             raise ValueError(f"unknown event type: {ev.type}")
 
-    def _index_chunks(self, source_id: str, body: str) -> None:
+    def _index_chunks(self, source_id: str, body: str, kind: str | None = None) -> None:
         from .chunks import chunk_document, lexical_tokens
 
-        for ch in chunk_document(body):
+        for ch in chunk_document(body, every_heading=kind == "ai_daily"):
             # The id carries the text's hash: if chunking changes, stale vectors can never attach to new text.
             cid = f"{source_id}#{ch.idx}:{hashlib.sha256(ch.text.encode()).hexdigest()[:10]}"
             self._conn.execute(
@@ -471,14 +504,15 @@ class Brain:
         return known, unknown
 
     def _add_elements(self, actor: str, elements: list[Element], source_id: str | None,
-                      promoted_by: str | None = None) -> list[dict]:
+                      promoted_by: str | None = None, extra: dict | None = None) -> list[dict]:
         created = []
         for el in elements:
             nid = new_id("n")
             self._emit(actor, "node_added", {"id": nid, "kind": el.kind, "label": make_label(el.text),
                                              "body": el.text, "source_id": source_id,
                                              "importance": el.importance,
-                                             **({"promoted_by": promoted_by} if promoted_by else {})})
+                                             **({"promoted_by": promoted_by} if promoted_by else {}),
+                                             **(extra or {})})
             concept_ids = [self._concept_id(actor, c) for c in el.concepts]
             for cid in concept_ids:
                 self._link(actor, nid, cid, "about", W_ABOUT, "ai")
@@ -528,8 +562,61 @@ class Brain:
         source_id = src["source_id"] if src else self._conn.execute(
             "SELECT id FROM sources WHERE sha256 = ?", (body_sha256(body),)).fetchone()[0]
         with self._tx():
-            created = self._add_elements(actor, [element], source_id, promoted_by="explicit")
+            created = self._add_elements(actor, [element], source_id, promoted_by="explicit",
+                                         extra={"derivation": "verbatim", "confidence": 1.0})
+            self._emit(actor, "node_sourced", {"node_id": created[0]["id"], "source_id": source_id,
+                                               "line_start": 1, "line_end": 1, "quote": words})
         return {"node_id": created[0]["id"], "source_id": source_id, "already_remembered": False}
+
+    def good(self, session_id: str, praised: str, owner_words: str = "/good",
+             used_memory_ids: list[str] | None = None, concepts: list[str] | None = None) -> dict[str, Any]:
+        """The owner sent /good (spec v0.5 §7.3): what was praised becomes a memory at once, and the memories
+        the praised answer used are strengthened. Only the explicit signal counts, never the tone of words."""
+        from .inbox import add_source
+
+        ai_name = self.session_ai(session_id)
+        self._require_writable()
+        praised = " ".join(praised.split())
+        if not praised:
+            raise InvalidInput("praised（褒められたやり方）が空です。直前の返答の何が良かったのかを 1 文で書いてください。")
+        lesson = f"オーナーが良いと評価したやり方: {praised}"
+        element = parse_elements([{"kind": "procedural", "text": lesson, "concepts": concepts or [],
+                                   "importance": 1.0}])[0]
+        used, unknown = self._existing_ids(used_memory_ids or [])
+        body = (f"{owner_words.strip() or '/good'}\n\n（{ai_name} が理解した、褒められたこと: {praised}）\n")
+        actor = f"ai:{ai_name}"
+        src = add_source(self, kind="good", author="human", ai_name=ai_name, title=make_label(lesson), body=body,
+                         actor=actor, meta={"relayed_by": ai_name, "session_id": session_id, "used": used})
+        source_id = src["source_id"] if src else None
+        existing = self._conn.execute("SELECT id FROM nodes WHERE body = ? AND status = 'active'",
+                                      (lesson,)).fetchone()
+        strengthened = []
+        with self._tx():
+            if existing:
+                nid = existing[0]
+            else:
+                nid = self._add_elements(actor, [element], source_id, promoted_by="explicit",
+                                         extra={"derivation": "paraphrase", "confidence": 0.9})[0]["id"]
+            self._emit(actor, "node_updated", {"id": nid, "goods_delta": 1})
+            if source_id:
+                self._emit(actor, "node_sourced", {"node_id": nid, "source_id": source_id, "line_start": 1,
+                                                   "line_end": 1, "quote": owner_words.strip() or "/good",
+                                                   "occurrence": bool(existing)})
+            for mid in used:
+                n = self.node(mid)
+                if n is None or n["kind"] == "concept":
+                    continue
+                self._emit(actor, "node_updated", {"id": mid, "goods_delta": 1,
+                                                   "importance": round(min(1.0, n["importance"] + GOOD_IMPORTANCE_STEP), 3)})
+                self._reinforce(actor, mid, nid, GOOD_HEBBIAN_RATE)
+                strengthened.append(n["body"])
+            for i, a in enumerate(used):
+                for b in used[i + 1:]:
+                    self._reinforce(actor, a, b, GOOD_HEBBIAN_RATE)
+        msg = f"覚えました: 「{praised}」を、オーナーが良いと評価したやり方として記憶しました。"
+        if strengthened:
+            msg += f" この返答で使った記憶 {len(strengthened)} 件のつながりも強めました。"
+        return {"node_id": nid, "strengthened": strengthened, "unknown_memory_ids": unknown, "message_to_user": msg}
 
     def submit_daily_log(self, session_id: str, thread_title: str, events_: list[str], corrections: list[str],
                          learnings: list[str], decisions: list[str], unresolved: list[str],
@@ -657,9 +744,12 @@ class Brain:
         with self._lock:
             r = self._recaller
             seeds = r.seeds(cue, session_id)
+            by_meaning = self._semantic_seeds(cue)
+            for nid, sim in by_meaning.items():
+                seeds[nid] = max(seeds.get(nid, 0.0), sim)
             activation, hops, parent = r.spread(seeds)
             hits = r.score(activation, hops, parent)
-            cue_ids = r.cue_matches(cue)
+            cue_ids = r.cue_matches(cue) | {nid for nid, sim in by_meaning.items() if sim >= NODE_FOUND_MIN}
             result = pack(r, hits, cue_ids, budget)
             ids = [h.id for h in result.rules + result.related] + [h.id for h, _ in result.insights]
             if ids and not self.paused:
@@ -696,6 +786,27 @@ class Brain:
             "tokens": estimate_tokens(text),
             "budget": budget,
         }
+
+    def _semantic_seeds(self, cue: str) -> dict[str, float]:
+        """Cortex memories close to the cue in meaning (bge-m3), so wording does not have to match."""
+        import numpy as np
+
+        from .embed import EmbedUnavailable
+
+        emb = self.embedder
+        if emb is None:
+            return {}
+        rows = self._conn.execute("SELECT v.node_id, v.vec FROM node_vectors v JOIN nodes n ON n.id = v.node_id"
+                                  " WHERE v.model = ? AND n.status = 'active'", (emb.model,)).fetchall()
+        if not rows:
+            return {}
+        try:
+            q = np.asarray(emb.embed([cue])[0], dtype=np.float32)
+        except EmbedUnavailable:
+            return {}
+        m = np.stack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
+        sims = (m @ q) / (np.linalg.norm(m, axis=1) * np.linalg.norm(q) + 1e-12)
+        return {rows[i][0]: float(sims[i]) for i in np.argsort(-sims)[:NODE_SEEDS_MAX] if sims[i] >= NODE_SEED_MIN}
 
     def _fallback(self, cue: str, budget: int) -> tuple[list[dict], list[str]]:
         """Hippocampus, then bookshelf, then the vault. Stops at the first stage that has evidence."""

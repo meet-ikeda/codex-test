@@ -23,6 +23,8 @@ def parse(argv):
             args["config"], i = argv[i + 1], i + 2
         elif a == "--allowedTools":
             args["allowed"], i = argv[i + 1], i + 2
+        elif a == "--output-format":
+            args["format"], i = argv[i + 1], i + 2
         elif a == "--strict-mcp-config":
             args["strict"], i = True, i + 1
         else:
@@ -32,14 +34,13 @@ def parse(argv):
 
 def answer(item):
     t = item["type"]
-    if t == "decompose":
-        first = item["text"].strip().splitlines()[0].lstrip("# ").strip()
-        return {"item_id": item["item_id"], "elements": [
-            {"kind": "procedural", "text": first, "concepts": ["睡眠テスト"], "importance": 0.8}]}
-    if t == "consolidate":
-        return {"item_id": item["item_id"], "elements": [
-            {"kind": "semantic", "text": f"{item['concept']} の出来事が {item['episode_count']} 件ある",
-             "concepts": [item["concept"]]}]}
+    if t == "promote":
+        n, first = next((n, l) for n, l in item["lines"] if l.strip())
+        return {"item_id": item["item_id"], "atoms": [
+            {"kind": "procedural", "text": first.lstrip("# ").strip(), "derivation": "verbatim", "lines": [n, n],
+             "concepts": ["睡眠テスト"], "confidence": 0.9}]}
+    if t == "write_daily":
+        return {"item_id": item["item_id"], "events": ["テストの会話をした"], "decisions": ["テストで決めた"]}
     if t == "reconcile":
         return {"item_id": item["item_id"], "action": "supersede", "keep_id": item["b"]["id"]}
     if t == "verify_links":
@@ -51,7 +52,7 @@ def answer(item):
 
 async def main():
     args = parse(sys.argv[1:])
-    assert args["strict"] and args["allowed"] == "mcp__exobrain-sleep__" and "sleep_next_batch" in args["prompt"]
+    assert args["strict"] and args["allowed"] == "mcp__exobrain-sleep" and "sleep_next_batch" in args["prompt"]
     server = json.load(open(args["config"], encoding="utf-8"))["mcpServers"]["exobrain-sleep"]
     params = StdioServerParameters(command=server["command"], args=server["args"], env=server["env"])
     async with stdio_client(params) as (r, w):
@@ -67,7 +68,10 @@ async def main():
                                                         "results": [answer(i) for i in batch["items"]]})
                 assert not res.is_error, res.content
             await s.call_tool("sleep_finish", {"summary": "テストの夢を見ました。"})
-    print("fake claude done")
+    assert args.get("format") == "json"
+    print(json.dumps({"type": "result", "num_turns": 7, "duration_ms": 12000, "total_cost_usd": 0.12,
+                      "usage": {"input_tokens": 1000, "output_tokens": 200, "cache_read_input_tokens": 5000,
+                                "cache_creation_input_tokens": 300}}))
 
 
 anyio.run(main)
