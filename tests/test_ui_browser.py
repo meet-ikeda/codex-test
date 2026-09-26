@@ -46,7 +46,7 @@ def page(brain, session):
 
 def test_graph_renders_and_tabs_work(page):
     pg, errors, brain = page
-    assert "MEMORIES // 003" in pg.locator("#graph-stats").inner_text()
+    assert "003 memories" in pg.locator("#graph-stats").inner_text()
     assert pg.locator("#m-nodes").inner_text() == "003"  # the rail counter
     pg.check("#g-table")
     assert pg.locator("#graph-table tbody tr").count() == 3

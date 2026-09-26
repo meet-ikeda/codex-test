@@ -46,12 +46,11 @@ exobrain erase --source <原文 id> [--node <要素 id>] [--since 日付 --until
 
 画面のグラフ表示に次のライブラリを同梱しています（いずれも MIT ライセンス。全文は `src/exobrain/web/vendor/LICENSES.txt`）。
 
-- sigma.js 3.0.3
 - graphology 0.26.0
-- graphology-library 0.8.0
+- graphology-library 0.8.0（配置の計算 ForceAtlas2 に使用）
+
+グラフの描画（粒子の銀河）は自作の WebGL（`src/exobrain/web/galaxy.js`）です。
 
 書体（SIL Open Font License 1.1。全文は `src/exobrain/web/fonts/LICENSES.txt`。@fontsource 5.3.0 から取得）:
 
-- Instrument Serif
-- JetBrains Mono
 - Inter Tight

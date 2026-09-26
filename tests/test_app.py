@@ -66,8 +66,8 @@ def test_api_needs_token_and_local_host(served):
 def test_static_files_cannot_escape(served):
     _, port = served
     assert request(port, "GET", "/../../brain.py")[0] == 404
-    assert request(port, "GET", "/vendor/sigma.min.js")[0] == 200
-    assert request(port, "GET", "/fonts/instrument-serif-latin-400-normal.woff2")[0] == 200
+    assert request(port, "GET", "/vendor/graphology.umd.min.js")[0] == 200
+    assert request(port, "GET", "/fonts/inter-tight-latin-300-normal.woff2")[0] == 200
 
 
 def test_graph_and_node(served):
