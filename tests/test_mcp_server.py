@@ -18,7 +18,9 @@ def server(brain):
 
 def test_tool_list_has_nothing_destructive(server):
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert set(tools) == {"start_session", "recall", "remember", "submit_daily_report", "open_source"}
+    assert set(tools) == {"start_session", "recall", "remember", "submit_daily_report", "open_source",
+                          "trace_correction", "apply_correction"}
+    assert not any(w in name for name in tools for w in ("erase", "delete", "pause", "restore"))
     assert "concepts" in tools["remember"].description
     assert "本棚" in tools["submit_daily_report"].description
 

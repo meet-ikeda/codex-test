@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     source_id TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
     importance REAL NOT NULL DEFAULT 0.5, base_strength REAL NOT NULL DEFAULT 1.0,
     access_count INTEGER NOT NULL DEFAULT 0, last_activated_at TEXT,
-    status TEXT NOT NULL DEFAULT 'active'
+    status TEXT NOT NULL DEFAULT 'active',
+    corrections INTEGER NOT NULL DEFAULT 0,  -- times the owner had to point this out again
+    pinned INTEGER NOT NULL DEFAULT 0         -- always included in recall (standing rule)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS nodes_concept_norm ON nodes(norm) WHERE kind = 'concept';
 CREATE INDEX IF NOT EXISTS nodes_kind ON nodes(kind, status);
@@ -66,13 +68,15 @@ CREATE INDEX IF NOT EXISTS edges_dst ON edges(dst);
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY, ai_name TEXT NOT NULL, started_at TEXT NOT NULL, last_seen_at TEXT NOT NULL
 );
+-- Full-text index of bookshelf originals (trigram: works for Japanese without word breaks).
+CREATE VIRTUAL TABLE IF NOT EXISTS source_fts USING fts5(source_id UNINDEXED, title, body, tokenize = 'trigram');
 -- Short-term memory: what each conversation has recalled.
 CREATE TABLE IF NOT EXISTS session_items (
     session_id TEXT NOT NULL, node_id TEXT NOT NULL, at TEXT NOT NULL,
     PRIMARY KEY (session_id, node_id)
 );
 """
-PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions", "session_items")
+PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions", "session_items", "source_fts")
 
 
 class InvalidInput(ValueError):
@@ -155,14 +159,48 @@ class Brain:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.execute("PRAGMA busy_timeout = 10000")
+        self._conn.execute("PRAGMA secure_delete = ON")  # erased content is overwritten, not just unlinked
         self._conn.executescript(events.SCHEMA + PROJECTION_SCHEMA)
+        self._migrate()
+        self.fts_secure_delete = self._enable_fts_secure_delete()
         # MCP runs sync tools in worker threads; one write transaction at a time per process.
         # Across processes, BEGIN IMMEDIATE + busy_timeout serialize writers.
         self._lock = threading.RLock()
         self._recaller = Recaller(self._conn)
 
+    def _migrate(self) -> None:
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(nodes)")}
+        for col in ("corrections", "pinned"):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+
+    def _enable_fts_secure_delete(self) -> bool:
+        """FTS5 secure-delete (SQLite 3.42+) removes forensic traces from the index on delete."""
+        try:
+            self._conn.execute("INSERT INTO source_fts (source_fts, rank) VALUES ('secure-delete', 1)")
+            return True
+        except sqlite3.OperationalError:
+            return False  # older SQLite: erase() falls back to rebuilding the index
+
     def close(self) -> None:
         self._conn.close()
+
+    # ---- pause (FR-10) ------------------------------------------------------
+
+    @property
+    def paused(self) -> bool:
+        return (self.settings.home / "paused").exists()
+
+    def set_paused(self, value: bool) -> None:
+        flag = self.settings.home / "paused"
+        if value:
+            flag.touch()
+        else:
+            flag.unlink(missing_ok=True)
+
+    def _require_writable(self) -> None:
+        if self.paused:
+            raise InvalidInput("exobrain は利用者によって一時停止中です。記憶の追加はできません（思い出すことはできます）。")
 
     def __enter__(self) -> Brain:
         return self
@@ -199,6 +237,9 @@ class Brain:
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (p["id"], p["kind"], p["author"], p["ai_name"], p["title"], p["path"], p["sha256"], p["created_at"]),
             )
+            path = self.settings.drive_root / p["path"]
+            body = read_body(path) if path.exists() else ""
+            c.execute("INSERT INTO source_fts (source_id, title, body) VALUES (?, ?, ?)", (p["id"], p["title"], body))
         elif ev.type == "node_added":
             c.execute(
                 "INSERT INTO nodes (id, kind, label, body, norm, source_id, created_by, created_at, importance)"
@@ -231,6 +272,26 @@ class Brain:
                 [(p["session_id"], nid, ev.at) for nid in p["ids"]],
             )
             c.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (ev.at, p["session_id"]))
+        elif ev.type == "node_updated":
+            sets, args = [], []
+            for col in ("base_strength", "pinned", "status"):
+                if col in p:
+                    sets.append(f"{col} = ?")
+                    args.append(p[col])
+            if p.get("corrections_delta"):
+                sets.append("corrections = corrections + ?")
+                args.append(p["corrections_delta"])
+            if sets:
+                c.execute(f"UPDATE nodes SET {', '.join(sets)} WHERE id = ?", (*args, p["id"]))
+        elif ev.type == "erased":
+            # Payloads that held the content are nulled separately; here we drop the projection rows.
+            if p["target"] == "source":
+                c.execute("DELETE FROM sources WHERE id = ?", (p["id"],))
+                c.execute("DELETE FROM source_fts WHERE source_id = ?", (p["id"],))
+            else:
+                c.execute("DELETE FROM nodes WHERE id = ?", (p["id"],))
+                c.execute("DELETE FROM edges WHERE src = ? OR dst = ?", (p["id"], p["id"]))
+                c.execute("DELETE FROM session_items WHERE node_id = ?", (p["id"],))
         elif ev.type == "session_started":
             c.execute(
                 "INSERT INTO sessions (id, ai_name, started_at, last_seen_at) VALUES (?, ?, ?, ?)",
@@ -327,13 +388,16 @@ class Brain:
         sid = new_id("s")
         with self._tx():
             self._emit(f"ai:{ai_name}", "session_started", {"id": sid, "ai_name": ai_name})
+        from .inbox import ingest
+
+        ingest(self)  # memos dropped in the inbox reach the bookshelf before the conversation starts
         return {"session_id": sid, "profile": self.profile(PROFILE_BUDGET)}
 
     def profile(self, budget: int) -> str:
         """The owner's standing rules and key facts, strongest first, within a token budget."""
         rows = self._conn.execute(
             "SELECT id, kind, body FROM nodes WHERE status = 'active' AND kind IN ('procedural', 'semantic')"
-            " ORDER BY CASE kind WHEN 'procedural' THEN 0 ELSE 1 END,"
+            " ORDER BY pinned DESC, CASE kind WHEN 'procedural' THEN 0 ELSE 1 END,"
             " importance * base_strength DESC, access_count DESC, created_at DESC"
         )
         lines, used = [], 0
@@ -354,6 +418,7 @@ class Brain:
 
     def remember(self, session_id: str, elements: Iterable[Any]) -> dict[str, Any]:
         ai_name = self.session_ai(session_id)
+        self._require_writable()
         parsed = parse_elements(elements)
         if not parsed:
             raise InvalidInput("elements が空です。")
@@ -370,6 +435,7 @@ class Brain:
         used_memory_ids: Iterable[str] = (),
     ) -> dict[str, Any]:
         ai_name, title = self.session_ai(session_id), title.strip()
+        self._require_writable()
         if not title or len(title) > TITLE_MAX:
             raise InvalidInput(f"title は 1〜{TITLE_MAX} 文字にしてください。")
         if not report.strip():
@@ -419,7 +485,7 @@ class Brain:
             hits = r.score(activation, hops, parent)
             result = pack(r, hits, r.cue_matches(cue), budget)
             ids = [h.id for h in result.rules + result.related] + [h.id for h, _ in result.insights]
-            if ids:
+            if ids and not self.paused:
                 actor = f"ai:{ai_name}"
                 with self._tx():
                     self._emit(actor, "recalled", {"session_id": session_id, "ids": ids})
@@ -436,6 +502,29 @@ class Brain:
             "tokens": estimate_tokens(text),
             "budget": budget,
         }
+
+    def search_bookshelf(self, query: str, keywords: list[str] | None = None, limit: int = 5) -> list[dict]:
+        from .search import search
+
+        with self._lock:
+            return search(self._conn, query, keywords, limit)
+
+    def add_memo(self, title: str, text: str) -> dict[str, Any] | None:
+        """The owner hands over a memo (pasted text). Filed on the bookshelf as is."""
+        from .inbox import add_memo
+
+        return add_memo(self, title, text)
+
+    def trace_correction(self, session_id: str, correction: str, context: str = "",
+                         keywords: list[str] | None = None, used_memory_ids: list[str] | None = None) -> dict[str, Any]:
+        from . import correction as corr
+
+        return corr.trace(self, session_id, correction, context, keywords, used_memory_ids)
+
+    def apply_correction(self, session_id: str, trace_id: str, mode: str, **kwargs: Any) -> dict[str, Any]:
+        from . import correction as corr
+
+        return corr.apply(self, session_id, trace_id, mode, **kwargs)
 
     def open_source(self, source_id: str, max_chars: int = 8000) -> dict[str, Any]:
         s = self._conn.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()

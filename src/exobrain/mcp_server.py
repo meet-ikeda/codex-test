@@ -28,6 +28,14 @@ exobrain は、利用者（オーナー）の外部脳です。どの AI・ど�
      注意されたことや利用者の好みは procedural にし、importance を高くする。
    - used_memory_ids: この会話で実際に役立った記憶の id（[n_...] の部分）。
 4. 途中でも、すぐ残すべきことがあれば remember で追加してよい。
+5. 間違いを指摘されたとき、または自分の間違いに気づいたときは、言い訳より先に次の順で脳を書き換える。
+   a. trace_correction で記憶と本棚をたどる（探すだけで、何も変えない）。
+   b. 候補を見て apply_correction を呼ぶ。
+      - 脳に同じ内容があった → mode='reinforce'（覚えていたのに思い出せなかった。つながりを強める）
+      - 脳になく本棚にあった → mode='restore'（原文から脳に戻す）
+      - どこにもなかった     → mode='new'
+      事実を誤って覚えていたなら superseded_ids で古い記憶を置き換える。
+   c. 返ってきた message_to_user を、そのまま利用者に伝える。
 
 author が human の記憶は利用者自身の言葉で、最優先です。
 記憶を消したり原文を書き換えたりする道具はありません。それは利用者だけが行います。
@@ -80,6 +88,30 @@ def build_server(brain: Brain) -> MCPServer:
         used_memory_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         return guarded(brain.submit_daily_report, session_id, title, report, elements, used_memory_ids or [])
+
+    @server.tool(annotations=reads)
+    def trace_correction(session_id: str, correction: str, context: str = "",
+                         keywords: list[str] | None = None,
+                         used_memory_ids: list[str] | None = None) -> dict[str, Any]:
+        """指摘を受けたときに最初に呼ぶ。脳と本棚から候補を探すだけで、何も書き換えない。
+        correction: 指摘の内容。context: そのとき何をしていたか。keywords: 検索に使う語（固有名詞など）。
+        used_memory_ids: 間違えたときに使っていた記憶の id。"""
+        return guarded(brain.trace_correction, session_id, correction, context, keywords, used_memory_ids)
+
+    @server.tool(annotations=appends)
+    def apply_correction(session_id: str, trace_id: str, mode: str, lesson: str = "",
+                         kind: str | None = None, concepts: list[str] | None = None,
+                         target_id: str | None = None, source_id: str | None = None,
+                         wrong_memory_ids: list[str] | None = None,
+                         superseded_ids: list[str] | None = None) -> dict[str, Any]:
+        """trace_correction の結果を受けて脳を書き換える。
+        mode: 'reinforce'（target_id に brain_candidates の id）/ 'restore'（source_id に bookshelf_candidates の id）/
+        'new'（どこにもない）。lesson: 今後どうするか・正しい内容（300 文字以内）。kind: 'procedural' か 'semantic'。
+        wrong_memory_ids: 間違いの原因になった記憶（つながりを弱める）。superseded_ids: 誤っていた事実・ルール（lesson で置き換える）。
+        返り値の message_to_user を利用者にそのまま伝えること。"""
+        return guarded(brain.apply_correction, session_id, trace_id, mode, lesson=lesson, kind=kind,
+                       concepts=concepts, target_id=target_id, source_id=source_id,
+                       wrong_memory_ids=wrong_memory_ids, superseded_ids=superseded_ids)
 
     @server.tool(annotations=reads)
     def open_source(source_id: str, max_chars: int = 8000) -> dict[str, Any]:

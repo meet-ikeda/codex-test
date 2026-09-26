@@ -206,7 +206,7 @@ class Recaller:
         """Strongest rules overall, used to fill the rules share when the cue activates few."""
         rows = self.conn.execute(
             "SELECT id, kind, body, created_at, created_by FROM nodes WHERE status = 'active'"
-            " AND kind = 'procedural' ORDER BY importance * base_strength DESC, access_count DESC LIMIT ?",
+            " AND kind = 'procedural' ORDER BY pinned DESC, importance * base_strength DESC, access_count DESC LIMIT ?",
             (limit + len(exclude),),
         )
         return [Hit(r[0], r[1], r[2], r[3], r[4], 0.0, 0.0, 0, [r[0]]) for r in rows if r[0] not in exclude][:limit]
