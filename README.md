@@ -13,7 +13,7 @@
 | M1 | イベント記録・要素・つながり・本棚への原文保存、`start_session` / `remember` / `submit_daily_report` / `open_source` | ✅ |
 | M2 | 活性化拡散による想起（`recall`）、トークン上限、ひらめき枠、短期記憶、ヘッブ則による強化 | ✅ |
 | M3 | 受け取り箱、本棚の全文検索、指摘による書き換え（`trace_correction` / `apply_correction`）、消去・一時停止・バックアップと復元 | ✅ |
-| M4 | 睡眠 | 未着手 |
+| M4 | 睡眠（段階 A・B、夢日記、棚の目録、`exobrain sleep [--if-due] [--no-ai]`、launchd 設定の生成） | ✅ |
 | M5 | グラフ画面 | 未着手 |
 | M6 | Mac への導入（`exobrain install`）と実地確認 | 未着手 |
 
@@ -35,6 +35,7 @@ exobrain stats     # 記憶の件数
 exobrain ingest    # 受け取り箱のメモを本棚へ（AI が会話を始めたときにも自動で実行）
 exobrain memo 題名 < メモ.md
 exobrain search 語句
+exobrain sleep [--if-due] [--no-ai]   # 睡眠（AI による整理は Claude Code を使う）
 exobrain pause / resume
 exobrain backup / restore [バックアップ]
 exobrain erase --source <原文 id> [--node <要素 id>] [--since 日付 --until 日付] --confirm 消去する

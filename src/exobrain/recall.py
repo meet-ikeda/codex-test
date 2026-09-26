@@ -31,7 +31,17 @@ INSIGHT_MIN_ACTIVATION = 1e-3
 RELATED_MIN_RATIO = 0.02  # weaker than this share of the best score is noise, not a memory
 CUE_MATCH_MIN = 0.12  # bigram overlap that counts as "matches the cue"
 RECENCY_DAYS = 30.0
+LINK_HALF_LIFE_DAYS = 30.0  # unused links fade...
+LINK_FLOOR = 0.3  # ...but never below 30% of their learned weight: long-term memory stays reachable
 KIND_LABEL_JA = {"episode": "出来事", "semantic": "知識", "procedural": "ルール", "concept": "概念"}
+
+
+def effective_weight(weight: float, last_reinforced_at: str | None, now: datetime) -> float:
+    """Links fade with disuse. Computed at read time, so decay needs no events."""
+    if not last_reinforced_at:
+        return weight
+    days = max(0.0, (now - datetime.fromisoformat(last_reinforced_at)).total_seconds() / 86400)
+    return weight * (LINK_FLOOR + (1 - LINK_FLOOR) * 0.5 ** (days / LINK_HALF_LIFE_DAYS))
 
 
 def normalize(text: str) -> str:
@@ -126,12 +136,13 @@ class Recaller:
 
     def _neighbors(self, nid: str) -> list[tuple[str, float]]:
         rows = self.conn.execute(
-            "SELECT e.src, e.dst, e.weight FROM edges e JOIN nodes n"
+            "SELECT e.src, e.dst, e.weight, e.last_reinforced_at FROM edges e JOIN nodes n"
             " ON n.id = CASE WHEN e.src = ? THEN e.dst ELSE e.src END"
-            " WHERE (e.src = ? OR e.dst = ?) AND n.status = 'active' AND e.kind != 'supersedes'",
+            " WHERE (e.src = ? OR e.dst = ?) AND n.status = 'active' AND e.kind != 'supersedes' AND e.weight > 0",
             (nid, nid, nid),
         ).fetchall()
-        return [(dst if src == nid else src, w) for src, dst, w in rows]
+        now = datetime.now(timezone.utc)
+        return [(dst if src == nid else src, effective_weight(w, last, now)) for src, dst, w, last in rows]
 
     def spread(self, seeds: dict[str, float]) -> tuple[dict[str, float], dict[str, int], dict[str, str]]:
         activation = dict(seeds)

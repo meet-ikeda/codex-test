@@ -39,6 +39,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--until", help="この日時より前")
     s.add_argument("--confirm", default="", help=f"実行するには「{safety.CONFIRM_PHRASE}」と指定する")
 
+    s = sub.add_parser("sleep", help="睡眠（記憶の整理）を実行する")
+    s.add_argument("--if-due", action="store_true", help="前回の睡眠から一定時間たっているときだけ眠る")
+    s.add_argument("--no-ai", action="store_true", help="AI を使わない整理だけを行う")
+
     sub.add_parser("pause", help="AI からの書き込みを一時停止する")
     sub.add_parser("resume", help="一時停止を解除する")
     sub.add_parser("backup", help="脳のバックアップを作る")
@@ -70,6 +74,17 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"\n確認のため --confirm {safety.CONFIRM_PHRASE} を付けて、もう一度実行してください。")
                     return 1
                 _print(safety.erase(brain, plan, a.confirm))
+            elif a.cmd == "sleep":
+                from . import sleep
+
+                if a.if_due and not sleep.is_due(brain):
+                    print("まだ眠る時間ではありません。")
+                    return 0
+                try:
+                    _print(sleep.run(brain, use_ai=not a.no_ai))
+                except sleep.SleepBusy as e:
+                    print(e)
+                    return 0
             elif a.cmd == "pause":
                 brain.set_paused(True)
                 print("一時停止しました。AI は記憶を追加できません（思い出すことはできます）。")

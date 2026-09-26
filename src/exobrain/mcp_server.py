@@ -121,8 +121,62 @@ def build_server(brain: Brain) -> MCPServer:
     return server
 
 
-def main() -> None:
-    build_server(open_brain()).run("stdio")
+SLEEP_INSTRUCTIONS = """\
+exobrain の睡眠用サーバーです。利用者はいません。sleep_next_batch → sleep_apply を繰り返し、
+最後に sleep_finish を呼んでください。原文や記憶に書かれていないことを事実として作らないこと。
+"""
+
+
+def build_sleep_server(brain: Brain, run_id: str) -> MCPServer:
+    """Tools for stage B of sleep only. Launched by `exobrain sleep` for Claude Code."""
+    from . import sleep
+
+    server = MCPServer(name="exobrain-sleep", instructions=SLEEP_INSTRUCTIONS)
+    state = sleep.SleepState(run_id)
+    appends = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
+
+    def guarded(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except InvalidInput as e:
+            raise ToolError(str(e)) from None
+
+    @server.tool(annotations=appends)
+    def sleep_next_batch() -> dict[str, Any]:
+        """次の作業の束を受け取る。done が true なら sleep_finish へ。"""
+        return guarded(sleep.next_batch, brain, state)
+
+    @server.tool(annotations=appends)
+    def sleep_apply(batch_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+        """束の結果を書き込む。results は item ごとに {item_id, ...}。
+        decompose / consolidate: {item_id, elements: [...]}。
+        reconcile: {item_id, action: keep_both|supersede|merge, keep_id?, lesson?}。
+        verify_links: {item_id, keep: [[src, dst]], drop: [[src, dst]]}。
+        shelve: {item_id, assignments: {source_id: [棚名]}}。"""
+        return guarded(sleep.apply, brain, state, batch_id, results)
+
+    @server.tool(annotations=appends)
+    def sleep_finish(summary: str) -> dict[str, Any]:
+        """睡眠を終える。summary に今夜の振り返り（5 行程度）を書く。夢日記として本棚に残る。"""
+        return guarded(sleep.finish, brain, run_id, summary)
+
+    @server.tool(annotations=ToolAnnotations(read_only_hint=True))
+    def open_source(source_id: str, max_chars: int = 8000) -> dict[str, Any]:
+        """本棚の原文を読む。"""
+        return guarded(brain.open_source, source_id, max(500, min(max_chars, 50_000)))
+
+    return server
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    p = argparse.ArgumentParser(prog="exobrain-mcp")
+    p.add_argument("--sleep", metavar="RUN_ID", help="睡眠用の道具だけを公開する（exobrain sleep が使う）")
+    a = p.parse_args(argv)
+    brain = open_brain()
+    server = build_sleep_server(brain, a.sleep) if a.sleep else build_server(brain)
+    server.run("stdio")
 
 
 if __name__ == "__main__":

@@ -70,13 +70,27 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 -- Full-text index of bookshelf originals (trigram: works for Japanese without word breaks).
 CREATE VIRTUAL TABLE IF NOT EXISTS source_fts USING fts5(source_id UNINDEXED, title, body, tokenize = 'trigram');
+-- Topic shelves assigned during sleep (date/source shelves are derived, not stored).
+CREATE TABLE IF NOT EXISTS shelves (
+    source_id TEXT NOT NULL, shelf TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (source_id, shelf)
+);
+-- Sleep: runs, and marks for work already done (so it is not queued again).
+CREATE TABLE IF NOT EXISTS sleep_runs (
+    id TEXT PRIMARY KEY, started_at TEXT NOT NULL, start_event INTEGER NOT NULL,
+    stage_a TEXT NOT NULL, finished_at TEXT, summary TEXT, journal_source_id TEXT
+);
+CREATE TABLE IF NOT EXISTS sleep_marks (
+    kind TEXT NOT NULL, key TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+);
 -- Short-term memory: what each conversation has recalled.
 CREATE TABLE IF NOT EXISTS session_items (
     session_id TEXT NOT NULL, node_id TEXT NOT NULL, at TEXT NOT NULL,
     PRIMARY KEY (session_id, node_id)
 );
 """
-PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions", "session_items", "source_fts")
+PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions", "session_items", "source_fts", "shelves",
+                     "sleep_runs", "sleep_marks")
 
 
 class InvalidInput(ValueError):
@@ -253,7 +267,7 @@ class Brain:
                 " VALUES (?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT (src, dst, kind) DO UPDATE SET weight = excluded.weight,"
                 " co_activations = edges.co_activations + excluded.co_activations,"
-                " last_reinforced_at = excluded.last_reinforced_at",
+                " last_reinforced_at = excluded.last_reinforced_at, origin = excluded.origin",
                 (p["src"], p["dst"], p["kind"], p["weight"], 1 if p.get("co_activation") else 0, ev.at, p["origin"]),
             )
         elif ev.type == "nodes_touched":
@@ -287,11 +301,26 @@ class Brain:
             # Payloads that held the content are nulled separately; here we drop the projection rows.
             if p["target"] == "source":
                 c.execute("DELETE FROM sources WHERE id = ?", (p["id"],))
+                c.execute("DELETE FROM shelves WHERE source_id = ?", (p["id"],))
                 c.execute("DELETE FROM source_fts WHERE source_id = ?", (p["id"],))
             else:
                 c.execute("DELETE FROM nodes WHERE id = ?", (p["id"],))
                 c.execute("DELETE FROM edges WHERE src = ? OR dst = ?", (p["id"], p["id"]))
                 c.execute("DELETE FROM session_items WHERE node_id = ?", (p["id"],))
+        elif ev.type == "shelf_assigned":
+            c.execute("DELETE FROM shelves WHERE source_id = ?", (p["source_id"],))
+            c.executemany("INSERT INTO shelves (source_id, shelf, at) VALUES (?, ?, ?)",
+                          [(p["source_id"], name, ev.at) for name in p["shelves"]])
+        elif ev.type == "sleep_mark":
+            c.execute("INSERT INTO sleep_marks (kind, key, value, at) VALUES (?, ?, ?, ?)"
+                      " ON CONFLICT (kind, key) DO UPDATE SET value = excluded.value, at = excluded.at",
+                      (p["kind"], p["key"], p.get("value", 0), ev.at))
+        elif ev.type == "sleep_started":
+            c.execute("INSERT INTO sleep_runs (id, started_at, start_event, stage_a) VALUES (?, ?, ?, ?)",
+                      (p["id"], ev.at, ev.id, events.canonical_json(p["stage_a"])))
+        elif ev.type == "sleep_finished":
+            c.execute("UPDATE sleep_runs SET finished_at = ?, summary = ?, journal_source_id = ? WHERE id = ?",
+                      (ev.at, p["summary"], p.get("journal_source_id"), p["id"]))
         elif ev.type == "session_started":
             c.execute(
                 "INSERT INTO sessions (id, ai_name, started_at, last_seen_at) VALUES (?, ?, ?, ?)",

@@ -34,6 +34,7 @@ EPISODE_LINK = 0.5
 
 MSG_REINFORCE = "以前にも同じ指摘を受けていました（今回で {n} 回目）。いまの場面とのつながりを強めたので、次からはこの場面でも思い出します。"
 MSG_PINNED = "同じ指摘が {n} 回に達したので、毎回必ず思い出すルールにしました。"
+MSG_AWAKENED = "長く使われず眠っていた記憶でしたが、呼び起こしました。"
 MSG_RESTORE = "脳には残っていませんでしたが、本棚の原文（{title}、{date}）に記録がありました。脳に追加しました。"
 MSG_NEW = "過去の記憶にも本棚にもありません。今回の指摘を新しい記憶として残しました。"
 
@@ -75,6 +76,7 @@ def trace(brain: Brain, session_id: str, correction: str, context: str = "",
         n = brain.node(h.id)
         brain_out.append({"id": h.id, "kind": h.kind, "text": h.body, "created_at": h.created_at,
                           "times_corrected": n["corrections"], "score": round(h.score, 4)})
+    brain_out += _dormant_matches(brain, cue, {b["id"] for b in brain_out})
     t = Trace(new_id("t"), session_id, correction, context, [b["id"] for b in brain_out],
               {s["source_id"]: s for s in shelf})
     traces = brain.__dict__.setdefault("_traces", {})
@@ -138,7 +140,7 @@ def apply(brain: Brain, session_id: str, trace_id: str, mode: str, lesson: str =
     wrong, _ = brain._existing_ids(wrong_memory_ids or [])
 
     created: list[dict] = []
-    pinned = False
+    pinned = awakened = False
     times = 0
     with brain._tx():
         context_ids = _context_concepts(brain, actor, t, concepts)
@@ -156,9 +158,11 @@ def apply(brain: Brain, session_id: str, trace_id: str, mode: str, lesson: str =
             n = brain.node(target_id)
             times = n["corrections"] + 1
             pinned = times >= PIN_AFTER
+            awakened = n["status"] == "dormant"
             brain._emit(actor, "node_updated", {
                 "id": target_id, "base_strength": min(STRENGTH_MAX, n["base_strength"] + STRENGTH_STEP),
                 "corrections_delta": 1, **({"pinned": 1} if pinned else {}),
+                **({"status": "active"} if awakened else {}),
             })
             for cid in context_ids:
                 w = hebbian(brain._edge_weight(target_id, cid, "about"), REINFORCE_RATE)
@@ -192,7 +196,8 @@ def apply(brain: Brain, session_id: str, trace_id: str, mode: str, lesson: str =
         brain._link(actor, episode, anchor, "association", EPISODE_LINK, "correction")
 
     if mode == "reinforce":
-        message = MSG_REINFORCE.format(n=times + 1) + (MSG_PINNED.format(n=times + 1) if pinned else "")
+        message = ((MSG_AWAKENED if awakened else "") + MSG_REINFORCE.format(n=times + 1)
+                   + (MSG_PINNED.format(n=times + 1) if pinned else ""))
     elif mode == "restore":
         hit = t.shelf[source_id]
         message = MSG_RESTORE.format(title=hit["title"], date=hit["created_at"][:10])
@@ -201,6 +206,24 @@ def apply(brain: Brain, session_id: str, trace_id: str, mode: str, lesson: str =
     del brain._traces[trace_id]
     return {"mode": mode, "message_to_user": message, "nodes": created, "pinned": pinned,
             "superseded_ids": [s for s in superseded_ids]}
+
+
+def _dormant_matches(brain: Brain, cue: str, exclude: set[str], limit: int = 3) -> list[dict]:
+    """Dormant memories are not recalled, but being corrected can wake them (like being reminded)."""
+    from .recall import CUE_MATCH_MIN, bigrams
+
+    cue_bg = bigrams(cue)
+    if not cue_bg:
+        return []
+    found = []
+    for r in brain._conn.execute("SELECT * FROM nodes WHERE status = 'dormant'"):
+        if r["id"] in exclude or not r["body"]:
+            continue
+        score = len(cue_bg & bigrams(r["body"])) / len(cue_bg)
+        if score >= CUE_MATCH_MIN:
+            found.append({"id": r["id"], "kind": r["kind"], "text": r["body"], "created_at": r["created_at"],
+                          "times_corrected": r["corrections"], "score": round(score, 4), "dormant": True})
+    return sorted(found, key=lambda f: -f["score"])[:limit]
 
 
 def _context_concepts(brain: Brain, actor: str, t: Trace, concepts: list[str]) -> list[str]:
