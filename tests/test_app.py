@@ -40,7 +40,7 @@ def request(port, method, path, body=None, token=None, host=None, ctype="applica
     conn.close()
     try:
         return res.status, json.loads(raw)
-    except json.JSONDecodeError:
+    except ValueError:  # not JSON (static files, fonts)
         return res.status, raw
 
 
@@ -67,6 +67,7 @@ def test_static_files_cannot_escape(served):
     _, port = served
     assert request(port, "GET", "/../../brain.py")[0] == 404
     assert request(port, "GET", "/vendor/sigma.min.js")[0] == 200
+    assert request(port, "GET", "/fonts/instrument-serif-latin-400-normal.woff2")[0] == 200
 
 
 def test_graph_and_node(served):

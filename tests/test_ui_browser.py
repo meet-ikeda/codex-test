@@ -46,7 +46,8 @@ def page(brain, session):
 
 def test_graph_renders_and_tabs_work(page):
     pg, errors, brain = page
-    assert "記憶 3 件" in pg.locator("#graph-stats").inner_text()
+    assert "MEMORIES // 003" in pg.locator("#graph-stats").inner_text()
+    assert pg.locator("#m-nodes").inner_text() == "003"  # the rail counter
     pg.check("#g-table")
     assert pg.locator("#graph-table tbody tr").count() == 3
     pg.uncheck("#g-table")
@@ -63,7 +64,7 @@ def test_graph_renders_and_tabs_work(page):
     pg.locator("#s-reader pre").filter(has_text="写真は社内撮影にする").wait_for()
 
     pg.click("button[data-tab=safety]")
-    pg.check("#pause")
+    pg.click("label.switch")  # the visible switch, as a person would
     pg.locator("#paused-badge").wait_for(state="visible")
     assert brain.paused
     assert errors == []

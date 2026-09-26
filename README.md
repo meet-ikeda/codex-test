@@ -49,3 +49,9 @@ exobrain erase --source <原文 id> [--node <要素 id>] [--since 日付 --until
 - sigma.js 3.0.3
 - graphology 0.26.0
 - graphology-library 0.8.0
+
+書体（SIL Open Font License 1.1。全文は `src/exobrain/web/fonts/LICENSES.txt`。@fontsource 5.3.0 から取得）:
+
+- Instrument Serif
+- JetBrains Mono
+- Inter Tight

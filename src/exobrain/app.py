@@ -33,7 +33,7 @@ MAX_GRAPH_NODES = 5000
 MAX_GRAPH_EDGES = 20000
 INBOX_POLL_SECONDS = 60
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-                ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8"}
+                ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2"}
 
 
 class App:
@@ -51,7 +51,8 @@ class App:
         kinds = [k for k in (q.get("kinds") or "episode,semantic,procedural").split(",")
                  if k in ("episode", "semantic", "procedural")]
         statuses = ["active", "dormant"] if q.get("dormant") == "1" else ["active"]
-        sql = (f"SELECT id, kind, label, status, pinned, base_strength, access_count, created_at, created_by, source_id"
+        sql = (f"SELECT rowid AS no, id, kind, label, status, pinned, base_strength, access_count, created_at,"
+               f" created_by, source_id"
                f" FROM nodes WHERE kind IN ({','.join('?' * len(kinds))}) AND status IN ({','.join('?' * len(statuses))})")
         args: list[Any] = [*kinds, *statuses]
         if q.get("days"):
@@ -92,7 +93,7 @@ class App:
             degree[e["s"]] += 1
             degree[e["t"]] += 1
         changed = self._changed_in_last_sleep()
-        nodes = [{"id": n["id"], "kind": n["kind"], "label": n["label"], "status": n["status"],
+        nodes = [{"id": n["id"], "no": n["no"], "kind": n["kind"], "label": n["label"], "status": n["status"],
                   "pinned": bool(n["pinned"]), "created_at": n["created_at"], "created_by": n["created_by"],
                   "size": round(3 + 2.2 * math.log1p(n["access_count"]) + 1.5 * n["base_strength"]
                                 + (4 if n["pinned"] else 0), 2),
@@ -148,9 +149,11 @@ class App:
             source = dict(s) if s else None
         shelves = [r[0] for r in b._conn.execute("SELECT shelf FROM shelves WHERE source_id = ?",
                                                  (n["source_id"],))] if n["source_id"] else []
-        return {"node": {k: n[k] for k in ("id", "kind", "label", "body", "status", "pinned", "corrections",
-                                           "importance", "base_strength", "access_count", "created_at",
-                                           "created_by", "last_activated_at")},
+        no = b._conn.execute("SELECT rowid FROM nodes WHERE id = ?", (node_id,)).fetchone()[0]
+        return {"node": {"no": no, **{k: n[k] for k in ("id", "kind", "label", "body", "status", "pinned",
+                                                        "corrections", "importance", "base_strength",
+                                                        "access_count", "created_at", "created_by",
+                                                        "last_activated_at")}},
                 "neighbors": nbrs[:40], "source": source, "shelves": shelves}
 
     # ---- bookshelf --------------------------------------------------------------------
@@ -307,7 +310,7 @@ def make_handler(app: App, port: int):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Security-Policy",
                              "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;"
-                             " connect-src 'self'; frame-ancestors 'none'")
+                             " font-src 'self'; connect-src 'self'; frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(body)
 

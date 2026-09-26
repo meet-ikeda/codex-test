@@ -21,7 +21,7 @@ exobrain-mcp = "exobrain.mcp_server:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-exobrain = ["web/*.html", "web/*.js", "web/*.css", "web/vendor/*"]
+exobrain = ["web/*.html", "web/*.js", "web/*.css", "web/vendor/*", "web/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
