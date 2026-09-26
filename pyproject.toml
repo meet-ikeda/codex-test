@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "exobrain"
 version = "0.1.0"
-description = "Append-only external-brain memory that AI can add to but never overwrite"
+description = "External brain shared across AIs: elements, weighted links, and a bookshelf of originals"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["mcp>=2.2,<3"]

@@ -1,34 +1,41 @@
 import asyncio
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from exobrain.mcp_server import build_server
-from exobrain.store import MemoryStore
+
+
+def call(server, name, args):
+    result = asyncio.run(server.call_tool(name, args))
+    return result.structured_content
 
 
 @pytest.fixture
-def env(tmp_path):
-    store = MemoryStore(tmp_path / "m.db")
-    yield store, build_server(store)
-    store.close()
+def server(brain):
+    return build_server(brain)
 
 
-def test_ai_has_no_destructive_tools(env):
-    _, server = env
-    names = {t.name for t in asyncio.run(server.list_tools())}
-    assert names == {"remember", "recall", "history", "propose_revision", "verify_integrity"}
+def test_tool_list_has_nothing_destructive(server):
+    tools = {t.name: t for t in asyncio.run(server.list_tools())}
+    assert set(tools) == {"start_session", "remember", "submit_daily_report", "open_source"}
+    assert "concepts" in tools["remember"].description
+    assert "本棚" in tools["submit_daily_report"].description
 
 
-def test_ai_remember_is_marked_ai(env):
-    store, server = env
-    asyncio.run(server.call_tool("remember", {"content": "猫の名前はミケ", "tags": ["家族"]}))
-    [rec] = store.current()
-    assert rec.author == "ai" and rec.tags == ["家族"]
+def test_full_conversation(server, brain):
+    sid = call(server, "start_session", {"ai_name": "Codex"})["session_id"]
+    r = call(server, "submit_daily_report", {
+        "session_id": sid, "title": "初めての日報", "report": "今日は exobrain を試した。",
+        "elements": [{"kind": "procedural", "text": "結論を先に書く", "concepts": ["文章"], "importance": 0.9}],
+    })
+    assert r["nodes"][0]["kind"] == "procedural"
+    assert "結論を先に書く" in call(server, "start_session", {"ai_name": "Claude Desktop"})["profile"]
+    assert call(server, "open_source", {"source_id": r["source_id"]})["body"] == "今日は exobrain を試した。"
 
 
-def test_ai_proposal_leaves_memory_intact(env):
-    store, server = env
-    rec = store.remember("住所は東京", "human")
-    asyncio.run(server.call_tool("propose_revision", {"memory_id": rec.id, "content": "住所は大阪"}))
-    assert [r.content for r in store.current()] == ["住所は東京"]
-    assert len(store.pending_proposals()) == 1
+def test_bad_input_reaches_the_ai_as_a_message(server):
+    sid = call(server, "start_session", {"ai_name": "Codex"})["session_id"]
+    with pytest.raises(ToolError, match="分けてください"):
+        asyncio.run(server.call_tool("remember", {"session_id": sid,
+                                                  "elements": [{"kind": "episode", "text": "長" * 400}]}))
