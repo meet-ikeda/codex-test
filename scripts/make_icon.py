@@ -1,4 +1,4 @@
-"""The exobrain app icon: a low-poly brain in profile (grey facets lit from the upper left, white seams)
+"""The exobrain app icon: a low-poly brain in profile (pale pink facets lit from the upper left, white seams)
 over the EXOBRAIN logotype, on a white macOS-style tile. The outline is the one the opening's particles gather into.
 
 Usage: python scripts/make_icon.py <out_dir>   (needs Pillow, SciPy, numpy; writes icon-1024.png and exobrain.icns)
@@ -33,6 +33,13 @@ def brain_outline():
     for s in segs:
         pts += bezier(*s)[:-1]
     return pts
+
+
+LIGHT, SHADE = (253, 238, 240), (236, 184, 194)  # a pale pink, from lit to shaded: light, not heavy
+
+
+def pink(k):
+    return tuple(int(a + (b - a) * k) for a, b in zip(LIGHT, SHADE)) + (255,)
 
 
 def even(poly, spacing, closed=True):
@@ -101,11 +108,7 @@ def main(out: Path) -> None:
             nodes.append((x, y))
     P = np.array(nodes)
 
-    # Soft shadow under the brain.
-    lo = max(y for _, y in stem)
-    sh = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    ImageDraw.Draw(sh).ellipse((S * 0.30, lo + S * 0.035, S * 0.70, lo + S * 0.065), fill=(0, 0, 0, 60))
-    img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(S * 0.012)))
+    lo = max(y for _, y in stem)  # where the brain ends: the logo goes below
 
     # Facets: light from the upper left, each face a slightly different grey.
     xs, ys = P[:, 0], P[:, 1]
@@ -113,7 +116,7 @@ def main(out: Path) -> None:
     facets = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     fd = ImageDraw.Draw(facets)
     for poly in (cerebrum, stem):  # a base tone under the facets, so no gap shows through at the edge
-        fd.polygon(poly, fill=(185, 185, 185, 255))
+        fd.polygon(poly, fill=pink(0.5))
     tris = []
     for tri in Delaunay(P).simplices:
         pts = [tuple(P[i]) for i in tri]
@@ -121,19 +124,19 @@ def main(out: Path) -> None:
         if not m[int(cy), int(cx)]:
             continue
         t = 0.55 * (cx - x0) / (x1 - x0) + 0.45 * (cy - y0) / (y1 - y0)  # 0 = upper left, 1 = lower right
-        g = int(max(88, min(250, 246 - 150 * t + random.uniform(-26, 26))))
-        fd.polygon(pts, fill=(g, g, g, 255))
+        k = max(0.0, min(1.0, 0.1 + 0.75 * t + random.uniform(-0.16, 0.16)))  # 0 = lit, 1 = in shade
+        fd.polygon(pts, fill=pink(k))
         tris.append(pts)
     for pts in tris:  # hairline seams between the faces
         fd.line(pts + [pts[0]], fill=(255, 255, 255, 150), width=3)
     img.alpha_composite(facets)
 
-    # The logo: EXOBRAIN in gothic, widely spaced.
+    # The logo: EXOBRAIN in gothic, widely spaced (a little closer to the brain now that there is no shadow).
     font = ImageFont.truetype("/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc", int(S * 0.066))
     text, track = "EXOBRAIN", S * 0.020
     widths = [font.getlength(ch) for ch in text]
     total = sum(widths) + track * (len(text) - 1)
-    x, y = S / 2 - total / 2, lo + S * 0.085
+    x, y = S / 2 - total / 2, lo + S * 0.06
     d = ImageDraw.Draw(img)
     for ch, w in zip(text, widths):
         d.text((x, y), ch, font=font, fill=(17, 17, 17, 255))
