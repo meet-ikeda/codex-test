@@ -441,3 +441,30 @@ def test_note_sent_by_the_obsidian_plugin_is_filed_with_its_counter_answers(tmp_
         run_id, _ = sleep.start(b)
         item = next(i for i in sleep.next_batch(b, sleep.SleepState(run_id))["items"] if i["type"] == "promote")
         assert "佐藤さん（入社3年目）" in item["instructions"] and item["note_type"] == "interview"
+
+
+def test_gemini_daily_without_cursors_is_filed_once_and_promotes_its_decisions(tmp_path):
+    import os
+    import time
+
+    from exobrain.inbox import ingest
+
+    dl = tmp_path / "Downloads"
+    dl.mkdir()
+    text = ('---\nexobrain_kind: daily\nexobrain_source: "gemini"\nexobrain_thread_title: "採用サイトの相談"\n'
+            'exobrain_sequence: "2"\nexobrain_entry_date: ""\n---\n\n# AI日報 · 採用サイトの相談\n\n## 今日の出来事\n\n'
+            '- 構成案を比べた\n\n## 注意・訂正されたこと\n\n- 特になし\n\n## 工夫・学び\n\n- 特になし\n\n'
+            '## 決まったこと\n\n- トップの見出しは社員の言葉にする\n\n## 未解決・次に続くこと\n\n- 特になし\n')
+    for name in ("exobrain-日報-1.md", "exobrain-日報-1 (1).md"):  # downloaded twice by mistake
+        (dl / name).write_text(text, encoding="utf-8")
+        old = time.time() - 10
+        os.utime(dl / name, (old, old))
+    with Brain(Settings(home=tmp_path / "h", drive_root=tmp_path / "d", embed_model="", downloads_dir=dl)) as b:
+        added = ingest(b)
+        assert len(added) == 1 and added[0]["kind"] == "ai_daily"  # the same content only once
+        row = b._conn.execute("SELECT ai_name, title FROM sources").fetchone()
+        assert row[0] == "Gemini" and row[1].startswith("AI日報 · 採用サイトの相談 · 20")  # date filled on arrival
+        run_id, _ = sleep.start(b)
+        items = [i for i in sleep.next_batch(b, sleep.SleepState(run_id))["items"] if i["type"] == "promote"]
+        texts = ["\n".join(t for _, t in i["lines"]) for i in items]
+        assert len(items) == 1 and "社員の言葉" in texts[0]

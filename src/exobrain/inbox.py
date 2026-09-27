@@ -152,8 +152,24 @@ def file_obsidian_note(brain: Brain, text: str, origin_file: str | None = None) 
                       meta=meta, hippocampus=not confidential)
 
 
+def file_simple_daily(brain: Brain, text: str, origin_file: str | None = None) -> dict | None:
+    """A daily log from an AI that cannot keep cursors (Gemini's web app): the part of a thread since its last
+    "/日報". No continuity check; the same content is still never filed twice (content hash)."""
+    fm = daily.front_matter(text)
+    source = str(fm.get("exobrain_source") or "unknown")
+    ai = {"gemini": "Gemini", "chatgpt": "ChatGPT", "claude": "Claude"}.get(source.casefold(), source)
+    title = str(fm.get("exobrain_thread_title") or "無題のスレッド")
+    date = str(fm.get("exobrain_entry_date") or "") or datetime.now().strftime("%Y-%m-%d")
+    meta = {"source": source, "thread_title": title, "entry_date": date, "simple": True,
+            **({"sequence": str(fm["exobrain_sequence"])} if fm.get("exobrain_sequence") else {})}
+    return add_source(brain, kind="ai_daily", author="ai", ai_name=ai, title=f"AI日報 · {title} · {date}",
+                      body=text, actor=f"ai:{ai}", origin_file=origin_file, meta=meta)
+
+
 def _kind_of(text: str) -> str:
     fm = daily.front_matter(text)
+    if fm.get("exobrain_kind") == "daily":
+        return "simple_daily"
     if fm.get("exobrain_kind") == "obsidian_note":
         return "obsidian_note"
     if fm.get("outbrain_kind") == "ai_daily":
@@ -209,6 +225,8 @@ def _take_from_inbox(brain: Brain, path: Path, now: float) -> dict | None:
             result = file_deposit(brain, text, origin_file=path.relative_to(inbox).as_posix())
         elif kind == "obsidian_note":
             result = file_obsidian_note(brain, text)
+        elif kind == "simple_daily":
+            result = file_simple_daily(brain, text, origin_file=path.relative_to(inbox).as_posix())
         else:
             result = add_memo(brain, path.stem, text)
     except daily.DailyRejected as e:
