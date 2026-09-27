@@ -164,3 +164,29 @@ def excerpt(messages: list[Message]) -> tuple[str, bool]:
         return text, False
     tail = EXCERPT_MAX - HEAD_KEEP
     return text[:HEAD_KEEP] + "\n\n（……途中を省略……）\n\n" + text[-tail:], True
+
+
+BACKFILL_SUFFIX = "#過去分"  # past logs are their own thread in protocol v1, so they never touch the nightly cursor
+
+
+def local_threads(codex_root: Path | None, claude_root: Path | None) -> list[Thread]:
+    out: list[Thread] = []
+    if codex_root and codex_root.is_dir():
+        out += list(codex_threads(codex_root))
+    if claude_root and claude_root.is_dir():
+        out += list(claude_code_threads(claude_root))
+    return out
+
+
+def backfill_slice(th: Thread, before: str, after: str) -> tuple[list[Message], bool]:
+    """The next piece of a thread's past (after `after`, before `before`) that fits one log without trimming.
+    Returns (messages, more_left)."""
+    past = [m for m in th.messages if after < m.at < before]
+    taken, size = [], 0
+    for m in past:
+        cost = len(m.text) + 40
+        if taken and size + cost > EXCERPT_MAX:
+            break
+        taken.append(m)
+        size += cost
+    return taken, len(taken) < len(past)

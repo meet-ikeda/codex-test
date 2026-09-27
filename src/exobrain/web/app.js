@@ -534,7 +534,9 @@ async function loadBrain() {
       const mem = b.cortex.memories.filter((n) => n.kind === kind);
       $(`#n-${kind}`).textContent = ` ${k[kind]}`;
       $(`#l-${kind}`).replaceChildren(...(mem.length ? mem.map((n) => {
-        const bits = [n.promoted_by ? `${PROMOTED_JA[n.promoted_by] || n.promoted_by}で記憶` : null,
+        const ABOUT = { client: "クライアント", interviewee: "取材相手", other: "他の人" };
+        const bits = [n.about && n.about !== "owner" ? `${ABOUT[n.about] || n.about}${n.subject ? `（${n.subject}）` : ""}の話` : null,
+          n.promoted_by ? `${PROMOTED_JA[n.promoted_by] || n.promoted_by}で記憶` : null,
           n.goods ? `褒められた ${n.goods}` : null, n.corrections ? `注意された ${n.corrections}` : null,
           n.occurrences > 1 ? `再登場 ${n.occurrences}` : null, n.revisions ? `書き換え ${n.revisions}` : null,
           n.pinned ? "固定" : null].filter(Boolean);

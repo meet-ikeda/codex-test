@@ -108,6 +108,51 @@ def _usage(brain, days: int) -> dict:
             "各回": rows}
 
 
+def _threads(brain, a) -> int:
+    from datetime import datetime
+
+    from . import sleep, transcripts
+    from .inbox import current_cursor
+
+    st = brain.settings
+    threads = transcripts.local_threads(st.codex_sessions, st.claude_projects)
+    before = transcripts.since_utc(st.daily_logs_since) if st.daily_logs_since else "9999"
+    queue = sleep.backfill_queue(brain)
+    local = lambda iso: datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")  # noqa: E731
+    if a.cmd == "threads":
+        rows = []
+        for th in sorted(threads, key=lambda t: t.messages[-1].at, reverse=True):
+            if a.search and a.search not in th.title:
+                continue
+            done = current_cursor(brain, th.key + transcripts.BACKFILL_SUFFIX) or ""
+            left = [m for m in th.messages if done < m.at < before]
+            rows.append({"id": th.thread_id[:13], "AI": th.product, "題名": th.title,
+                         "期間": f"{local(th.messages[0].at)}〜{local(th.messages[-1].at)}",
+                         "過去分の残り": f"{len(left)} 発言" + ("（取り込み待ち）" if th.key in queue else "")})
+            if len(rows) >= a.limit:
+                break
+        _print(rows)
+        return 0
+    chosen = []
+    for tid in a.thread_ids:
+        hits = [t for t in threads if t.thread_id.startswith(tid)]
+        if len(hits) != 1:
+            print(f"{tid}: {'見つかりません' if not hits else '複数に当てはまります。もう少し長く指定してください'}")
+            return 1
+        chosen.append(hits[0])
+    keys = [t.key for t in chosen]
+    if a.cancel:
+        sleep.save_backfill_queue(brain, [k for k in queue if k not in keys])
+        print(f"取り込み待ちから外しました: {len(keys)} 件")
+        return 0
+    sleep.save_backfill_queue(brain, queue + [k for k in keys if k not in queue])
+    for t in chosen:
+        print(f"取り込み待ちに入れました: {t.title}（{t.product}）")
+    print("次の睡眠から、毎晩の日報より前の発言を、ひと区切りずつ日報にします（1晩に最大"
+          f" {sleep.MAX_BACKFILL_ITEMS} 区切り）。同じスレッドを何度入れても重なりません。")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="exobrain", description="exobrain 外部脳の保守コマンド")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -130,6 +175,13 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("fade", help="原文を海馬から外す（大脳皮質への昇格の対象にしない。本棚には残る）")
     s.add_argument("source_ids", nargs="+", help="原文の id（src_...）")
+
+    s = sub.add_parser("threads", help="この Mac に残っている Codex・Claude Code のスレッドを一覧にする")
+    s.add_argument("--search", help="題名に含まれる語で絞る")
+    s.add_argument("--limit", type=int, default=30)
+    s = sub.add_parser("backfill", help="選んだスレッドの過去分（毎晩の日報より前）を、次の睡眠から日報にする")
+    s.add_argument("thread_ids", nargs="*", help="exobrain threads の id（先頭の数文字でよい）")
+    s.add_argument("--cancel", action="store_true", help="取り込み待ちから外す")
 
     sub.add_parser("export", help="大脳皮質の写しを Google ドライブに書き出す（睡眠のたびにも自動で書き出す）")
     s = sub.add_parser("usage", help="睡眠で使ったトークン数を見る")
@@ -216,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
                 missing = sorted(set(a.source_ids) - set(known))
                 print(f"海馬から外しました: {len(known)} 件（本棚には残っています）。"
                       + (f" 海馬に見つからなかったもの: {', '.join(missing)}" if missing else ""))
+            elif a.cmd in ("threads", "backfill"):
+                return _threads(brain, a)
             elif a.cmd == "export":
                 from .cortex_export import cortex_root, export
 

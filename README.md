@@ -45,6 +45,9 @@ exobrain settings --vault <保管庫> --add-extra-inbox <フォルダ> --embed-m
 exobrain settings --daily-logs-from 2026-09-27   # この日以降の Codex・Claude Code の会話から毎晩日報を作る
 exobrain export   # 大脳皮質の写しを Google ドライブへ（睡眠のたびにも自動）
 exobrain usage    # 睡眠で使ったトークン数
+exobrain threads --search 採用     # この Mac に残っている Codex・Claude Code のスレッド
+exobrain backfill 01a0cc8f          # そのスレッドの過去分（毎晩の日報より前）を、次の睡眠から日報にする
+exobrain fade src_...              # 原文を海馬から外す（昇格させない。本棚には残る）
 exobrain memo 題名 < メモ.md
 exobrain search 語句
 exobrain sleep [--if-due] [--no-ai]   # 睡眠（AI による整理は Claude Code を使う）

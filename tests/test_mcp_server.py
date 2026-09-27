@@ -24,6 +24,7 @@ def test_tool_list_has_nothing_destructive(server):
     # The AI no longer writes to the cortex on its own judgment (spec v0.5 §1).
     assert "覚えておいて" in tools["remember_explicit"].description
     assert "/日報" in tools["submit_daily_log"].description
+    assert "/思い出して" in tools["start_session"].description and "/思い出して" in tools["recall"].description
 
 
 def test_full_conversation(server, brain):
@@ -32,7 +33,10 @@ def test_full_conversation(server, brain):
                                            "kind": "procedural", "concepts": ["文章"]})
     assert not r["already_remembered"]
     assert brain.node(r["node_id"])["promoted_by"] == "explicit"
-    assert "結論から書いて" in call(server, "start_session", {"ai_name": "Claude Desktop"})["profile"]
+    # Memory is read only on "/思い出して": a plain session carries no profile.
+    assert "profile" not in call(server, "start_session", {"ai_name": "Claude Desktop"})
+    assert "結論から書いて" in call(server, "start_session", {"ai_name": "Claude Desktop",
+                                                           "include_profile": True})["profile"]
     assert call(server, "open_source", {"source_id": r["source_id"]})["body"].startswith("文章は結論から書いてほしい")
     sid2 = call(server, "start_session", {"ai_name": "Claude Desktop"})["session_id"]
     got = call(server, "recall", {"session_id": sid2, "cue": "文章の書き方"})

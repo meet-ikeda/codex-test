@@ -300,6 +300,7 @@ class App:
             for k in ("procedural", "semantic", "episode"):  # each box shows its strongest
                 memories += [dict(r) for r in c.execute(
                     "SELECT n.id, n.kind, n.body, n.promoted_by, n.importance, n.base_strength, n.goods, n.corrections,"
+                    " n.about, n.subject,"
                     " n.occurrences, n.pinned, n.created_at, n.access_count,"
                     " (SELECT COUNT(*) FROM revisions r WHERE r.node_id = n.id) AS revisions"
                     " FROM nodes n WHERE n.status = 'active' AND n.kind = ?"

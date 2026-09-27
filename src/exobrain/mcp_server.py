@@ -18,11 +18,15 @@ INSTRUCTIONS = """\
 exobrain は、利用者（オーナー）の外部脳です。どの AI・どのスレッドからも同じ記憶を共有します。
 覚えるかどうかは、あなたが判断するのではありません。オーナーの明示の合図と、夜の睡眠が決めます。
 
-1. 会話の最初に start_session を呼び、返ってきた profile（オーナーのルールと知識）に従って会話する。
-   続けて、オーナーの最初の発言を cue にして recall を呼ぶ。
-2. 話題が変わったとき、オーナーの過去・好み・決定・進行中の仕事が関わりそうなときは recall を呼ぶ。
+1. 記憶を読むのは、オーナーが「/思い出して」と送ったときだけ（思い出す場合とそうでない場合の答えを
+   オーナーが比べられるように。頼まれていないときは、記憶を読まずに答える）。
+   - 「/思い出して」が来たら start_session(include_profile=true) で profile（オーナーのルールと知識）を読み、
+     オーナーの発言（または直前の話題）を cue にして recall を呼び、その内容を踏まえて答え直す。
+     その会話では以後、話題が変わったら recall を呼んでよい。
    - recall は大脳皮質 → 海馬 → 本棚 → Obsidian の順に探す。記録から答えるときは、日時・書き手・出典を添える。
    - 「確認できる記録はありませんでした」と返ったら、以前に聞いた・決めたと答えてはいけない。
+2. 書き込みの道具（下の 3〜7）には session_id が要る。まだなければ start_session(include_profile=false) を
+   呼んで session_id だけを受け取る（このとき記憶は読まない）。
 3. オーナーが「覚えておいて」と言ったとき、または決定をはっきり告げたときだけ remember_explicit を呼ぶ。
    words にはオーナーの言葉をなるべくそのまま入れる。自分の判断で「大事そう」と思ったことは入れない。
 4. オーナーが「/日報」と送ったら submit_daily_log を呼ぶ。前回の /日報 のあと（初回は会話の最初から）に
@@ -60,14 +64,15 @@ def build_server(brain: Brain) -> MCPServer:
             raise ToolError(str(e)) from None
 
     @server.tool(annotations=appends)
-    def start_session(ai_name: str) -> dict[str, Any]:
-        """会話の最初に必ず呼ぶ。ai_name には自分の名前（例: "Claude Desktop", "Codex"）を入れる。
-        session_id と、利用者のルール・知識の要約 (profile) を返す。"""
-        return guarded(brain.start_session, ai_name)
+    def start_session(ai_name: str, include_profile: bool = False) -> dict[str, Any]:
+        """session_id を受け取る。ai_name には自分の名前（例: "Claude Desktop", "Codex"）を入れる。
+        include_profile=true はオーナーが「/思い出して」と送ったときだけ。そのときはオーナーのルール・知識の
+        要約 (profile) も返す。書き込みのためだけなら include_profile=false（記憶は読まない）。"""
+        return guarded(brain.start_session, ai_name, include_profile)
 
     @server.tool(annotations=appends)
     def recall(session_id: str, cue: str, budget: int = 1500) -> dict[str, Any]:
-        """いまの話題 (cue) から、つながりをたどって関連する記憶を思い出す。
+        """オーナーが「/思い出して」と送ったあとだけ使う。いまの話題 (cue) から、つながりをたどって関連する記憶を思い出す。
         大脳皮質で足りなければ、海馬・本棚・Obsidian の原文から引用を返す（evidence）。
         返り値の context をそのまま読めばよい。budget はトークン上限（300〜4000）。
         no_record が true なら、記録はどこにもない。以前に聞いたと答えないこと。"""

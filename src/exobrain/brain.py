@@ -68,7 +68,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     derivation TEXT,                          -- verbatim | paraphrase | inferred (OUTBRAIN v0.4 §4.3)
     confidence REAL,
     occurrences INTEGER NOT NULL DEFAULT 1,   -- seen again in another source on another day
-    goods INTEGER NOT NULL DEFAULT 0          -- times the owner sent /good for an answer that used it
+    goods INTEGER NOT NULL DEFAULT 0,         -- times the owner sent /good for an answer that used it
+    about TEXT,                               -- whose memory: owner | client | interviewee | other
+    subject TEXT                              -- who, when it is not the owner (company, person, role)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS nodes_concept_norm ON nodes(norm) WHERE kind = 'concept';
 CREATE INDEX IF NOT EXISTS nodes_kind ON nodes(kind, status);
@@ -244,7 +246,8 @@ class Brain:
             if col not in cols:
                 self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
         for col, decl in (("promoted_by", "TEXT"), ("derivation", "TEXT"), ("confidence", "REAL"),
-                          ("occurrences", "INTEGER NOT NULL DEFAULT 1"), ("goods", "INTEGER NOT NULL DEFAULT 0")):
+                          ("occurrences", "INTEGER NOT NULL DEFAULT 1"), ("goods", "INTEGER NOT NULL DEFAULT 0"),
+                          ("about", "TEXT"), ("subject", "TEXT")):
             if col not in cols:
                 self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {decl}")
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(sources)")}
@@ -356,10 +359,10 @@ class Brain:
         elif ev.type == "node_added":
             c.execute(
                 "INSERT INTO nodes (id, kind, label, body, norm, source_id, created_by, created_at, importance,"
-                " promoted_by, derivation, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " promoted_by, derivation, confidence, about, subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (p["id"], p["kind"], p["label"], p.get("body"), p.get("norm"), p.get("source_id"),
                  ev.actor, ev.at, p.get("importance", 0.5), p.get("promoted_by"), p.get("derivation"),
-                 p.get("confidence")),
+                 p.get("confidence"), p.get("about"), p.get("subject")),
             )
         elif ev.type == "edge_set":
             c.execute(
@@ -542,7 +545,7 @@ class Brain:
 
     # ---- public API used by the MCP tools --------------------------------
 
-    def start_session(self, ai_name: str) -> dict[str, Any]:
+    def start_session(self, ai_name: str, include_profile: bool = True) -> dict[str, Any]:
         ai_name = ai_name.strip() or "unknown"
         sid = new_id("s")
         with self._tx():
@@ -550,6 +553,8 @@ class Brain:
         from .inbox import ingest
 
         ingest(self)  # what arrived in the receiving box is taken in before the conversation starts
+        if not include_profile:  # the owner compares answers with and without memory: read only on "/思い出して"
+            return {"session_id": sid}
         return {"session_id": sid, "profile": self.profile(PROFILE_BUDGET)}
 
     def remember_explicit(self, session_id: str, words: str, kind: str = "procedural",
@@ -983,7 +988,8 @@ def format_evidence(evidence: list[dict], searched: bool = False) -> str:
             lines.append(f"- [Obsidian {e['file']}] 「{e['quote']}」")
             continue
         head = f" · {e['heading']}" if e.get("heading") else ""
-        lines.append(f"- [{e['place']} {e['created_at'][:10]} · {e['writer']} · {e['title']}{head}"
+        secret = " · 機密（外に出さない）" if e.get("confidential") else ""
+        lines.append(f"- [{e['place']}{secret} {e['created_at'][:10]} · {e['writer']} · {e['title']}{head}"
                      f" · {e['lines'][0]}〜{e['lines'][1]}行] 「{e['quote']}」 [{e['source_id']}]")
     return "\n".join(lines)
 

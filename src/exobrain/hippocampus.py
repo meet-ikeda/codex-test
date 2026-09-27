@@ -8,6 +8,7 @@ and a quote cut from the original, so an AI can say where it read something.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,6 +49,7 @@ class Hit:
     lexical: float
     score: float
     in_hippocampus: bool
+    confidential: bool = False
 
     def quote(self, cue_tokens: set[str]) -> str:
         """The part of the chunk that best matches the cue, cut verbatim from the original."""
@@ -69,7 +71,8 @@ class Hit:
         return {"source_id": self.source_id, "chunk_id": self.chunk_id, "place": "海馬" if self.in_hippocampus else "本棚",
                 "title": self.title, "kind": self.kind, "writer": who, "created_at": self.created_at,
                 "heading": self.heading, "lines": [self.line_start, self.line_end],
-                "quote": self.quote(cue_tokens), "score": round(self.score, 3)}
+                "quote": self.quote(cue_tokens), "score": round(self.score, 3),
+                **({"confidential": True} if self.confidential else {})}
 
 
 class ChunkIndex:
@@ -183,7 +186,7 @@ def search(brain: Brain, cue: str, scope: str = "all", limit: int = 5) -> list[H
         marks = ",".join("?" * len(ids))
         rows = conn.execute(
             "SELECT c.id, c.source_id, c.heading, c.line_start, c.line_end, c.text, s.kind, s.author, s.ai_name,"
-            " s.title, s.created_at, h.status AS hstatus FROM chunks c JOIN sources s ON s.id = c.source_id"
+            " s.title, s.created_at, s.meta_json, h.status AS hstatus FROM chunks c JOIN sources s ON s.id = c.source_id"
             f" LEFT JOIN hippocampus h ON h.source_id = c.source_id WHERE c.id IN ({marks}) AND s.erased = 0",
             tuple(ids)).fetchall()
     hits = []
@@ -203,7 +206,8 @@ def search(brain: Brain, cue: str, scope: str = "all", limit: int = 5) -> list[H
                 continue
             score = l_val
         hits.append(Hit(r["id"], r["source_id"], r["kind"], r["author"], r["ai_name"], r["title"], r["created_at"],
-                        r["heading"], r["line_start"], r["line_end"], r["text"], s_val, l_val, score, in_h))
+                        r["heading"], r["line_start"], r["line_end"], r["text"], s_val, l_val, score, in_h,
+                        bool(json.loads(r["meta_json"]).get("confidential")) if r["meta_json"] else False))
     hits.sort(key=lambda h: -h.score)
     if hits:  # far below the best answer is noise, not evidence
         hits = [h for h in hits if h.score >= hits[0].score - RELATIVE_MARGIN]

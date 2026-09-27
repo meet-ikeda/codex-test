@@ -34,6 +34,9 @@ DOWNLOADS_MAX_AGE_DAYS = 14
 VAULT_NOTE_MAX = 50_000
 SKIP_KINDS_FOR_HIPPOCAMPUS = {"dream"}
 _CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+# What kind of note it is, so that someone else's experience is never remembered as the owner's (spec v0.6 §5.1).
+NOTE_TYPE_TAGS = {"取材": "interview", "クライアント": "client"}
+CONFIDENTIAL_TAG = "機密"
 
 
 def _tag_present(text: str, tag: str, fm: dict[str, Any]) -> bool:
@@ -47,7 +50,7 @@ def _tag_present(text: str, tag: str, fm: dict[str, Any]) -> bool:
 
 def add_source(brain: Brain, *, kind: str, author: str, ai_name: str | None, title: str, body: str,
                actor: str = "human", origin_file: str | None = None, meta: dict | None = None,
-               checkpoint: daily.DailyMeta | None = None) -> dict | None:
+               checkpoint: daily.DailyMeta | None = None, hippocampus: bool = True) -> dict | None:
     """File an original on the bookshelf and let it enter the hippocampus. None if already filed."""
     from .brain import TITLE_MAX, InvalidInput, new_id
 
@@ -67,7 +70,7 @@ def add_source(brain: Brain, *, kind: str, author: str, ai_name: str | None, tit
                 "path": rel, "sha256": original.sha256, "created_at": original.created_at,
                 **({"origin_file": origin_file} if origin_file else {}), **({"meta": meta} if meta else {}),
             })
-            if kind not in SKIP_KINDS_FOR_HIPPOCAMPUS:
+            if hippocampus and kind not in SKIP_KINDS_FOR_HIPPOCAMPUS:
                 expires = datetime.now(timezone.utc) + timedelta(days=brain.settings.hippocampus_days)
                 brain._emit(actor, "hippocampus_entered", {"source_id": source_id,
                                                            "expires_at": expires.isoformat(timespec="seconds")})
@@ -260,8 +263,13 @@ def scan_vault(brain: Brain) -> list[dict]:
         if len(text) > VAULT_NOTE_MAX:
             _log(brain, f"#remember のノートが {len(text)} 文字あります。{VAULT_NOTE_MAX} 文字以下に分けてください: {rel}")
             continue
+        note_type = next((t for tag, t in NOTE_TYPE_TAGS.items() if _tag_present(text, tag, fm)), None)
+        confidential = _tag_present(text, CONFIDENTIAL_TAG, fm)
+        meta = {"vault": vault.name, **({"note_type": note_type} if note_type else {}),
+                **({"confidential": True} if confidential else {})}
+        # #機密: kept on the bookshelf (and found when recalling), never taken into the cortex or its copy.
         r = add_source(brain, kind="remember_note", author="human", ai_name=None, title=path.stem, body=text,
-                       origin_file=rel.as_posix(), meta={"vault": vault.name})
+                       origin_file=rel.as_posix(), meta=meta, hippocampus=not confidential)
         if r:
             added.append(r)
     seen_path.write_text(json.dumps(seen, ensure_ascii=False), encoding="utf-8")

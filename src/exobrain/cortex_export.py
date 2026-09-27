@@ -23,6 +23,7 @@ KIND_JA = {"procedural": "ルール・やり方", "semantic": "事実・決定",
 PROMOTED_JA = {"explicit": "明示", "demand": "需要（前にも言った）", "repetition": "反復", "association": "連想",
                "reconsolidation": "記憶を書き換えた経緯",
                None: "（v0.1 で記憶）"}
+ABOUT_JA = {"owner": "オーナー", "client": "クライアント", "interviewee": "取材相手", "other": "その他"}
 NOTICE = "> これは exobrain の大脳皮質の**写し**です。書き換えても脳は変わりません。直すときは、AI に「前にも言ったよね」と伝えるか、exobrain の画面を使ってください。"
 _UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f#^\[\]]+')
 
@@ -69,6 +70,7 @@ def _note(brain: Brain, n) -> str:
              f"corrections: {n['corrections']}", f"created_at: {n['created_at']}", "---", "",
              f"# {n['body']}", "", NOTICE, "",
              f"- 種類: {KIND_JA[n['kind']]}",
+             f"- 誰の話か: {ABOUT_JA.get(n['about'] or 'owner', n['about'])}" + (f"（{n['subject']}）" if n['subject'] else ""),
              f"- 大脳皮質に入った理由: {PROMOTED_JA.get(n['promoted_by'], n['promoted_by'])}",
              f"- 再登場: {n['occurrences']} 回 / 褒められた: {n['goods']} 回 / 注意された: {n['corrections']} 回", ""]
     quotes = c.execute(

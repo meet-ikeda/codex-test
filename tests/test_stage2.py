@@ -243,3 +243,110 @@ def test_erasing_a_rewritten_memory_takes_its_history_too(brain, session):
     left = brain._conn.execute("SELECT COUNT(*) FROM events WHERE type IN ('node_added', 'node_revised', 'node_sourced')"
                                " AND payload_json LIKE '%佐藤%'").fetchone()[0]
     assert left == 0 and brain.verify()[0]
+
+
+# ---- whose memory: interview / client / confidential notes (spec v0.6 §5.1) --------------------------
+
+
+def _vault_brain(tmp_path, files):
+    import os
+    import time
+
+    vault = tmp_path / "vault"
+    for name, text in files.items():
+        (vault / name).parent.mkdir(parents=True, exist_ok=True)
+        (vault / name).write_text(text, encoding="utf-8")
+        old = time.time() - 10
+        os.utime(vault / name, (old, old))
+    return Brain(Settings(home=tmp_path / "h", drive_root=tmp_path / "d", embed_model="", vault_root=vault))
+
+
+def test_interview_notes_are_remembered_as_the_interviewees(tmp_path):
+    from exobrain.brain import InvalidInput
+    from exobrain.inbox import scan_vault
+
+    b = _vault_brain(tmp_path, {"取材/佐藤さん.md": "#remember #取材\n入社前は建設会社を3社比べて迷った。\n"})
+    try:
+        scan_vault(b)
+        run_id, _ = sleep.start(b)
+        state = sleep.SleepState(run_id)
+        batch = sleep.next_batch(b, state)
+        item = next(i for i in batch["items"] if i["type"] == "promote")
+        assert item["note_type"] == "interview" and "取材相手のもの" in item["instructions"]
+        n = item["lines"][1][0]
+        bad = {"kind": "episode", "text": "建設会社を3社比べて迷った", "derivation": "paraphrase", "lines": [n, n],
+               "about": "interviewee"}
+        import pytest
+
+        with pytest.raises(InvalidInput, match="subject"):
+            sleep.apply(b, state, batch["batch_id"], [{"item_id": item["item_id"], "atoms": [bad]}])
+        good = dict(bad, text="取材相手の佐藤さんは入社前に建設会社を3社比べて迷った", subject="佐藤さん（取材相手）")
+        sleep.apply(b, state, batch["batch_id"], [{"item_id": item["item_id"], "atoms": [good]}])
+        node = b._conn.execute("SELECT about, subject FROM nodes WHERE kind = 'episode'").fetchone()
+        assert tuple(node) == ("interviewee", "佐藤さん（取材相手）")
+    finally:
+        b.close()
+
+
+def test_confidential_notes_stay_on_the_shelf_only(tmp_path):
+    from exobrain.hippocampus import search
+    from exobrain.inbox import scan_vault
+
+    b = _vault_brain(tmp_path, {"A社.md": "#remember #クライアント #機密\nA社は来春に工場を移転する予定。\n"})
+    try:
+        src = scan_vault(b)[0]
+        assert b._conn.execute("SELECT COUNT(*) FROM hippocampus").fetchone()[0] == 0  # never promoted
+        meta = json.loads(b._conn.execute("SELECT meta_json FROM sources WHERE id = ?", (src["source_id"],)).fetchone()[0])
+        assert meta == {"vault": "vault", "note_type": "client", "confidential": True}
+        sid = b.start_session("Codex")["session_id"]
+        r = b.recall(sid, "工場を移転する予定")
+        assert r["evidence"][0]["confidential"] and "機密（外に出さない）" in r["context"]
+        assert search(b, "工場を移転")[0].confidential
+    finally:
+        b.close()
+
+
+# ---- backfill: past threads the owner chooses (never overlapping, whatever the order) -----------------
+
+
+def test_backfill_takes_only_the_past_and_never_twice(tmp_path, monkeypatch):
+    from exobrain import transcripts
+
+    root = tmp_path / ".codex"
+    msg = lambda ts, role, text: {"timestamp": ts, "type": "response_item",  # noqa: E731
+                                   "payload": {"type": "message", "role": role,
+                                               "content": [{"type": "input_text", "text": text}]}}
+    rows = [{"timestamp": "2026-07-01T00:00:00Z", "type": "session_meta", "payload": {"id": "OLD", "source": "vscode"}}]
+    for day in ("2026-07-01", "2026-08-01", "2026-09-01", "2026-09-28"):
+        rows += [msg(f"{day}T03:00:00Z", "user", f"{day} の相談。" * 40), msg(f"{day}T03:00:05Z", "assistant", "了解。" * 40)]
+    jl(root / "sessions/2026/07/01/rollout-OLD.jsonl", rows)
+    jl(root / "session_index.jsonl", [{"id": "OLD", "thread_name": "古いスレッド"}])
+    monkeypatch.setattr(transcripts, "EXCERPT_MAX", 1500)  # small pieces: one day per log
+    s = Settings(home=tmp_path / "h", drive_root=tmp_path / "d", embed_model="", daily_logs_since="2026-09-27",
+                 codex_sessions=root / "sessions", claude_projects=tmp_path / "none")
+    with Brain(s) as b:
+        sleep.save_backfill_queue(b, ["codex:OLD"])
+
+        def night():
+            run_id, _ = sleep.start(b)
+            state, written = sleep.SleepState(run_id), []
+            while not (batch := sleep.next_batch(b, state))["done"]:
+                res = []
+                for i in batch["items"]:
+                    if i["type"] == "write_daily":
+                        written.append((i["thread"]["title"], i["conversation"]))
+                        res.append({"item_id": i["item_id"], "events": ["相談した"]})
+                    else:
+                        res.append({"item_id": i["item_id"], "atoms": [], "keep": [], "drop": [], "assignments": {}})
+                sleep.apply(b, state, batch["batch_id"], res)
+            return written
+
+        first = night()
+        past = "".join(w[1] for w in first if "過去分" in w[0])
+        assert all(d in past for d in ("2026-07-01", "2026-08-01", "2026-09-01")) and "2026-09-28" not in past
+        assert [w for w in first if "過去分" not in w[0]]  # the 28th came in as tonight's ordinary log
+        sleep.save_backfill_queue(b, ["codex:OLD"])  # asked again later: nothing is taken twice
+        assert [w for w in night() if "過去分" in w[0]] == []
+        assert sleep.backfill_queue(b) == []  # finished threads leave the queue
+        titles = [r[0] for r in b._conn.execute("SELECT title FROM sources WHERE kind = 'ai_daily' ORDER BY title")]
+        assert sum("過去分" not in t for t in titles) == 1 and sum("過去分" in t for t in titles) >= 2

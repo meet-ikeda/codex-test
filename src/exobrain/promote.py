@@ -14,6 +14,7 @@ says the same as an existing memory adds evidence to it instead of a new memory.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterator
 
@@ -165,6 +166,15 @@ def similar_memories(brain: Brain, text: str, limit: int = SIMILAR_SHOWN) -> lis
     return out
 
 
+ABOUTS = ("owner", "client", "interviewee", "other")
+NOTE_TYPE_HINT = {
+    "interview": "これは取材メモ。書かれた体験・意見・経歴は取材相手のもの。オーナーのものとして覚えない。"
+                 "取材相手の話は about='interviewee'、subject に相手（名前か役割）を入れる。"
+                 "オーナー自身の感想・気づきとはっきり書かれた部分だけ about='owner'。",
+    "client": "これはクライアントについてのメモ。クライアントの事情・方針・要望は about='client'、"
+              "subject に会社名や担当者を入れる。オーナー自身のことと混ぜない。",
+}
+PERSONAL_INFO_RULE = ("電話番号・住所・メールアドレス・口座などの個人情報や、パスワード・鍵は、原子に書かない。")
 OWNER_NOTE_HINT = (
     "これはオーナー自身のメモ（#remember またはメモ）。決定やルールに限らず、"
     "オーナーがいま取り組んでいる仕事・案件、考えていること・関心・問題意識も semantic として拾う"
@@ -177,13 +187,15 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
     numbered = [[seg.line_start + i, line] for i, line in enumerate(text.splitlines())]
     owner_note = s["kind"] in EXPLICIT_KINDS
     limit = ATOMS_PER_OWNER_SEGMENT if owner_note else ATOMS_PER_SEGMENT
+    meta_row = brain._conn.execute("SELECT meta_json FROM sources WHERE id = ?", (seg.source_id,)).fetchone()[0]
+    note_type = (json.loads(meta_row) if meta_row else {}).get("note_type")
     return {
         "type": "promote", "source_id": seg.source_id, "signal": seg.signal,
         "source": {"title": s["title"], "writer": s["ai_name"] if s["author"] == "ai" else "オーナー",
                    "date": s["created_at"][:10]},
         "lines": numbered, "similar_memories": similar_memories(brain, text),
         "instructions": (
-            (OWNER_NOTE_HINT if owner_note else "")
+            NOTE_TYPE_HINT.get(note_type, "") + (OWNER_NOTE_HINT if owner_note and not note_type else "")
             + f"この部分を、長く覚えておく価値のある「記憶の原子」に分ける（最大 {limit} 個。価値がなければ atoms を空に）。"
             "1 原子 = 1 つの決定・事実・ルール・好み・出来事。原子は単独で意味が通る 1 文（300 文字以内）にする。"
             "kind: procedural（やり方・ルール・好み・注意されたこと）/ semantic（事実・決定）/ episode（出来事）。"
@@ -192,8 +204,10 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
             "confidence: 0〜1。concepts: 固有名詞・話題を 8 個まで。"
             "similar_memories と同じ内容なら same_as にその id を入れる（新しく作らない）。"
             "similar_memories の内容を新しい決定が置き換えるなら supersedes にその id を入れる。"
-            "迷ったら統合しない。書かれていないことを足さない。"),
-        "max_atoms": limit,
+            "about: その記憶が誰についてか（owner=オーナー / client=クライアント / interviewee=取材相手 / other）。"
+            "owner 以外なら subject に誰か（会社名・人名・役割）を入れ、text の主語にもする。"
+            + PERSONAL_INFO_RULE + "迷ったら統合しない。書かれていないことを足さない。"),
+        "max_atoms": limit, **({"note_type": note_type} if note_type else {}),
     }
 
 
@@ -247,8 +261,15 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
             if a.get(key) and a[key] not in known:
                 raise InvalidInput(f"atoms[{i}].{key} には similar_memories にある id だけを入れてください。")
         concepts = [" ".join(str(x).split())[:40] for x in (a.get("concepts") or []) if str(x).strip()][:CONCEPTS_MAX]
+        default_about = {"interview": "interviewee", "client": "client"}.get(item.get("note_type"), "owner")
+        about = a.get("about") or default_about
+        if about not in ABOUTS:
+            raise InvalidInput(f"atoms[{i}].about は {', '.join(ABOUTS)} のいずれかです。")
+        subject = " ".join(str(a.get("subject") or "").split())[:40] or None
+        if about != "owner" and not subject and item.get("note_type"):
+            raise InvalidInput(f"atoms[{i}] は {about} の話なので、subject に誰か（名前か役割）を入れてください。")
         out.append({"kind": kind, "text": text, "derivation": der, "lines": ln, "quote": quote,
-                    "confidence": round(conf, 3), "concepts": concepts,
+                    "confidence": round(conf, 3), "concepts": concepts, "about": about, "subject": subject,
                     "same_as": a.get("same_as"), "supersedes": a.get("supersedes")})
     return out
 
@@ -273,7 +294,8 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
             continue
         created = brain._add_elements(
             actor, [Element(a["kind"], a["text"], a["concepts"], IMPORTANCE[item["signal"]])], src,
-            promoted_by=item["signal"], extra={"derivation": a["derivation"], "confidence": a["confidence"]})
+            promoted_by=item["signal"], extra={"derivation": a["derivation"], "confidence": a["confidence"],
+                                               "about": a["about"], **({"subject": a["subject"]} if a["subject"] else {})})
         nid = created[0]["id"]
         brain._emit(actor, "node_sourced", {"node_id": nid, "source_id": src, "line_start": a["lines"][0],
                                             "line_end": a["lines"][1], "quote": a["quote"]})
