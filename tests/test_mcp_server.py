@@ -18,7 +18,7 @@ def server(brain):
 
 def test_tool_list_has_nothing_destructive(server):
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert set(tools) == {"start_session", "recall", "remember_explicit", "submit_daily_log", "good", "open_source",
+    assert set(tools) == {"start_session", "recall", "remember_explicit", "submit_daily_log", "good", "revise_memory", "open_source",
                           "trace_correction", "apply_correction"}
     assert not any(w in name for name in tools for w in ("erase", "delete", "pause", "restore"))
     # The AI no longer writes to the cortex on its own judgment (spec v0.5 §1).

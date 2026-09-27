@@ -89,6 +89,10 @@ def plan_erase(brain: Brain, source_ids: list[str] = (), node_ids: list[str] = (
                                f" ({','.join('?' * len(sources))})", (nid, *sorted(sources))).fetchone()[0]
             if others == 0:
                 nodes.add(nid)
+    # The episode of rewriting a memory quotes its old wording: it goes with the memory.
+    for n in list(nodes):
+        nodes |= {r[0] for r in c.execute("SELECT episode_id FROM revisions WHERE node_id = ? AND episode_id IS NOT NULL",
+                                          (n,))}
     if since or until:
         q, args = "SELECT id FROM nodes WHERE kind != 'concept'", []
         if since:
@@ -128,6 +132,12 @@ def erase(brain: Brain, plan: dict[str, list], confirm: str) -> dict[str, Any]:
                     f" AND json_extract(payload_json, '$.id') IN ({','.join('?' * len(part))})",
                     (type_, *part),
                 )
+        # Old and new wordings of an erased memory.
+        for i in range(0, len(node_ids), 500):
+            part = node_ids[i : i + 500]
+            c.execute(
+                f"UPDATE events SET payload_json = NULL WHERE type = 'node_revised' AND payload_json IS NOT NULL"
+                f" AND json_extract(payload_json, '$.id') IN ({','.join('?' * len(part))})", tuple(part))
         # Quotes copied from an erased original, or belonging to an erased memory.
         for field, ids in (("source_id", source_ids), ("node_id", node_ids)):
             for i in range(0, len(ids), 500):

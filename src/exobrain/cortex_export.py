@@ -21,6 +21,7 @@ CORTEX_DIR = "大脳皮質"
 FOLDERS = {"procedural": "手続き記憶", "semantic": "意味記憶", "episode": "エピソード記憶"}
 KIND_JA = {"procedural": "ルール・やり方", "semantic": "事実・決定", "episode": "出来事"}
 PROMOTED_JA = {"explicit": "明示", "demand": "需要（前にも言った）", "repetition": "反復", "association": "連想",
+               "reconsolidation": "記憶を書き換えた経緯",
                None: "（v0.1 で記憶）"}
 NOTICE = "> これは exobrain の大脳皮質の**写し**です。書き換えても脳は変わりません。直すときは、AI に「前にも言ったよね」と伝えるか、exobrain の画面を使ってください。"
 _UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f#^\[\]]+')
@@ -81,6 +82,15 @@ def _note(brain: Brain, n) -> str:
             where = f"{q['line_start']}〜{q['line_end']}行" if q["line_start"] else ""
             lines.append(f"- {q['created_at'][:10]} · {who} · {q['title']} {where}")
             lines += [f"  > {l}" for l in q["quote"].splitlines()]
+        lines.append("")
+    revs = c.execute("SELECT at, old_body, new_body, reason, actor FROM revisions WHERE node_id = ? ORDER BY at",
+                     (n["id"],)).fetchall()
+    if revs:
+        lines += ["## 書き換えの履歴（再固定化）", ""]
+        for r in revs:
+            who = r["actor"][3:] if r["actor"].startswith("ai:") else r["actor"]
+            lines += [f"- {r['at'][:10]} · {who}", f"  - 前: {r['old_body']}", f"  - 後: {r['new_body']}",
+                      f"  - 理由: {r['reason']}"]
         lines.append("")
     return "\n".join(lines)
 

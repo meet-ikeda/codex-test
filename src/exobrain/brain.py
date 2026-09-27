@@ -44,6 +44,7 @@ GOOD_HEBBIAN_RATE = 0.3  # /good wires used memories together much harder than p
 NODE_SEED_MIN = 0.5  # bge-m3 cosine: a cortex memory this close to the cue starts the spreading (provisional)
 NODE_FOUND_MIN = 0.62  # ...and this close counts as the cortex having answered (no need to look further)
 NODE_SEEDS_MAX = 20
+REVISION_LINK = 0.8  # a memory and the episode of rewriting it stay closely tied
 FALLBACK_KEEP = 0.6  # share of the recall budget the cortex keeps when records are looked up too
 
 ELEMENT_KINDS = ("episode", "semantic", "procedural")
@@ -124,6 +125,12 @@ CREATE TABLE IF NOT EXISTS node_sources (
     node_id TEXT NOT NULL, source_id TEXT NOT NULL, line_start INTEGER, line_end INTEGER, quote TEXT NOT NULL,
     at TEXT NOT NULL, PRIMARY KEY (node_id, source_id, line_start)
 );
+-- Reconsolidation (spec v0.6): a memory rewritten when recalled, with why, and the episode of rewriting it.
+CREATE TABLE IF NOT EXISTS revisions (
+    node_id TEXT NOT NULL, at TEXT NOT NULL, old_body TEXT NOT NULL, new_body TEXT NOT NULL, reason TEXT NOT NULL,
+    episode_id TEXT, source_id TEXT, actor TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS revisions_node ON revisions(node_id);
 CREATE TABLE IF NOT EXISTS node_vectors (
     node_id TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (node_id, model)
 );
@@ -134,7 +141,7 @@ CREATE TABLE IF NOT EXISTS chunk_vectors (
 """
 PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions", "session_items", "source_fts", "shelves",
                      "sleep_runs", "sleep_marks", "chunks", "chunk_fts", "hippocampus", "ai_checkpoints",
-                     "node_sources")
+                     "node_sources", "revisions")
 
 
 class InvalidInput(ValueError):
@@ -327,6 +334,13 @@ class Brain:
                       (p["node_id"], p["source_id"], p.get("line_start"), p.get("line_end"), p["quote"], ev.at))
             if p.get("occurrence"):
                 c.execute("UPDATE nodes SET occurrences = occurrences + 1 WHERE id = ?", (p["node_id"],))
+        elif ev.type == "node_revised":
+            c.execute("UPDATE nodes SET body = ?, label = ? WHERE id = ?", (p["new_body"], p["label"], p["id"]))
+            c.execute("DELETE FROM node_vectors WHERE node_id = ?", (p["id"],))  # re-embedded with the new wording
+            c.execute("INSERT INTO revisions (node_id, at, old_body, new_body, reason, episode_id, source_id, actor)"
+                      " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                      (p["id"], ev.at, p["old_body"], p["new_body"], p["reason"], p.get("episode_id"),
+                       p.get("source_id"), ev.actor))
         elif ev.type == "hippocampus_entered":
             c.execute("INSERT OR IGNORE INTO hippocampus (source_id, entered_at, expires_at) VALUES (?, ?, ?)",
                       (p["source_id"], ev.at, p["expires_at"]))
@@ -403,6 +417,7 @@ class Brain:
                 c.execute("DELETE FROM nodes WHERE id = ?", (p["id"],))
                 c.execute("DELETE FROM node_sources WHERE node_id = ?", (p["id"],))
                 c.execute("DELETE FROM node_vectors WHERE node_id = ?", (p["id"],))
+                c.execute("DELETE FROM revisions WHERE node_id = ?", (p["id"],))
                 c.execute("DELETE FROM edges WHERE src = ? OR dst = ?", (p["id"], p["id"]))
                 c.execute("DELETE FROM session_items WHERE node_id = ?", (p["id"],))
         elif ev.type == "shelf_assigned":
@@ -617,6 +632,65 @@ class Brain:
         if strengthened:
             msg += f" この返答で使った記憶 {len(strengthened)} 件のつながりも強めました。"
         return {"node_id": nid, "strengthened": strengthened, "unknown_memory_ids": unknown, "message_to_user": msg}
+
+    def revise_memory(self, session_id: str, memory_id: str, new_text: str, reason: str,
+                      owner_words: str = "", source_id: str | None = None) -> dict[str, Any]:
+        """Reconsolidation (spec v0.6 §7.4): a memory recalled in a conversation turned out outdated or imprecise.
+        It is rewritten in place (id and links kept); the episode of rewriting it — when, by which AI, from what
+        to what, and why — is remembered too and tied to it. Needs evidence: the owner's words in this
+        conversation, or an original on the bookshelf. The old wording stays in the history."""
+        from datetime import datetime
+
+        from .inbox import add_source
+
+        ai_name = self.session_ai(session_id)
+        self._require_writable()
+        n = self.node(memory_id)
+        if n is None or n["kind"] == "concept" or n["status"] not in ("active", "dormant"):
+            raise InvalidInput(f"記憶 {memory_id} は見つからないか、書き換えられない状態です。")
+        new_text = " ".join(new_text.split())
+        reason = " ".join(reason.split())
+        if not new_text or len(new_text) > TEXT_MAX:
+            raise InvalidInput(f"new_text は 1〜{TEXT_MAX} 文字にしてください。")
+        if new_text == n["body"]:
+            raise InvalidInput("new_text が今の記憶と同じです。")
+        if not reason:
+            raise InvalidInput("reason（なぜ書き換えるのか）を書いてください。")
+        owner_words = owner_words.strip()
+        if not owner_words and not source_id:
+            raise InvalidInput("根拠が必要です。この会話でのオーナーの言葉（owner_words）か、本棚の原文（source_id）を渡してください。")
+        if source_id and not self._conn.execute("SELECT 1 FROM sources WHERE id = ? AND erased = 0",
+                                                (source_id,)).fetchone():
+            raise InvalidInput(f"原文 {source_id} は本棚にありません。")
+        actor = f"ai:{ai_name}"
+        if owner_words:  # the owner's words are filed on the bookshelf as the evidence
+            body = f"{owner_words}\n\n（{ai_name} が記憶を書き換えた根拠。理由: {reason}）\n"
+            src = add_source(self, kind="revision", author="human", ai_name=ai_name, title=make_label(owner_words),
+                             body=body, actor=actor, meta={"relayed_by": ai_name, "session_id": session_id,
+                                                           "memory_id": memory_id})
+            source_id = src["source_id"] if src else self._conn.execute(
+                "SELECT id FROM sources WHERE sha256 = ?", (body_sha256(body),)).fetchone()[0]
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        story = f"{today}、{ai_name} との会話で記憶を書き換えた: 「{n['body']}」→「{new_text}」。理由: {reason}"
+        if len(story) > TEXT_MAX:
+            story = story[: TEXT_MAX - 1] + "…"
+        with self._tx():
+            episode = self._add_elements(actor, [Element("episode", story, [], 0.6)], source_id,
+                                         promoted_by="reconsolidation",
+                                         extra={"derivation": "verbatim", "confidence": 1.0})[0]["id"]
+            self._emit(actor, "node_revised", {"id": memory_id, "old_body": n["body"], "new_body": new_text,
+                                               "label": make_label(new_text), "reason": reason,
+                                               "episode_id": episode, "source_id": source_id})
+            self._link(actor, memory_id, episode, "revised_in", REVISION_LINK, "reconsolidation")
+            self._reinforce(actor, memory_id, episode, REVISION_LINK)
+            quote = owner_words or self._conn.execute("SELECT title FROM sources WHERE id = ?",
+                                                      (source_id,)).fetchone()[0]
+            self._emit(actor, "node_sourced", {"node_id": memory_id, "source_id": source_id, "line_start": 1,
+                                               "line_end": 1, "quote": quote})
+        self._recaller.index.version = -1
+        return {"memory_id": memory_id, "episode_id": episode, "source_id": source_id,
+                "message_to_user": f"記憶を書き換えました: 「{n['body']}」→「{new_text}」（理由: {reason}）。"
+                                   "書き換えた経緯も出来事として覚えました。前の内容は履歴に残っています。"}
 
     def submit_daily_log(self, session_id: str, thread_title: str, events_: list[str], corrections: list[str],
                          learnings: list[str], decisions: list[str], unresolved: list[str],

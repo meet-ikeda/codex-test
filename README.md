@@ -3,7 +3,7 @@
 どの AI の、どのスレッドでも、あなたのことを最初から知っている状態で会話を始めるための記憶アプリです。
 情報を「要素」に分けて「つながり」で結び、人間の脳のように記憶します。
 
-- **統合仕様書 v0.5（最新。OUTBRAIN v0.4 の記憶モデルと統合）: [docs/spec-v0.5.md](docs/spec-v0.5.md)**
+- **統合仕様書 v0.6（最新。OUTBRAIN v0.4 の記憶モデルと統合）: [docs/spec-v0.6.md](docs/spec-v0.6.md)**
 - 要件: [docs/requirements.md](docs/requirements.md)
 - 設計: [docs/design.md](docs/design.md)（v0.1 の設計。v0.5 と食い違う部分は v0.5 が優先）
 - 評価: [docs/eval-questions-v2.md](docs/eval-questions-v2.md)（固定した評価質問）、[docs/eval-embedding.md](docs/eval-embedding.md)（検索の設定の測定）

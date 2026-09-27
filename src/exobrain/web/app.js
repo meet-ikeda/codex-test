@@ -8,7 +8,8 @@ const SOURCE_KIND = { memo: "Your note", daily_report: "AI report", dream: "Drea
   remember_note: "#remember note", explicit: "Remember this", good: "/good" };
 const SOURCE_JA = { memo: "メモ", daily_report: "AI の報告（旧）", dream: "夢日記", ai_daily: "AI 日報",
   remember_note: "#remember", explicit: "覚えておいて", good: "/good" };
-const PROMOTED_JA = { explicit: "明示", demand: "前にも言った", repetition: "反復", association: "連想" };
+const PROMOTED_JA = { explicit: "明示", demand: "前にも言った", repetition: "反復", association: "連想",
+  reconsolidation: "書き換えの経緯として" };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const $ = (sel) => document.querySelector(sel);
 
@@ -347,7 +348,7 @@ async function selectNode(id) {
   await guarded(async () => renderDetail(await api(`/api/node/${encodeURIComponent(id)}`)));
 }
 
-function renderDetail({ node, neighbors, source, shelves }) {
+function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes = [] }) {
   const parts = [
     el("button", { class: "close", on: { click: clearSelection } }, "Close ×"),
     el("p", { class: "room" }, node.kind === "concept" ? "Concept" : KIND_EN[node.kind]),
@@ -370,6 +371,17 @@ function renderDetail({ node, neighbors, source, shelves }) {
     parts.push(el("div", { class: "section-title" }, cap("Original — もとになった原文"), cap(when(source.created_at, false))));
     parts.push(el("button", { class: "link source-link", on: { click: () => openSource(source.id) } }, source.title));
     if (shelves.length) parts.push(el("p", { class: "hint" }, `Shelves — ${shelves.join(" / ")}`));
+  }
+  if (quotes.length) {
+    parts.push(el("div", { class: "section-title" }, cap("Evidence — 根拠の引用"), cap(pad(quotes.length, 2))));
+    for (const q of quotes) parts.push(el("blockquote", { class: "quote" }, q.quote,
+      el("button", { class: "link cap", on: { click: () => openSource(q.source_id) } }, `${when(q.created_at, false)} — ${q.title}`)));
+  }
+  if (revisions.length) {
+    parts.push(el("div", { class: "section-title" }, cap("Rewritten — 書き換えの履歴"), cap(pad(revisions.length, 2))));
+    for (const r of revisions) parts.push(el("div", { class: "revision" },
+      cap(`${when(r.at)} — ${who(r.actor)}`), el("p", { class: "old" }, r.old_body), el("p", {}, `→ ${r.new_body}`),
+      el("p", { class: "hint" }, `理由: ${r.reason}`)));
   }
   parts.push(el("div", { class: "section-title" }, cap("Links — つながり"), cap(pad(neighbors.length, 2))));
   const maxW = Math.max(0.01, ...neighbors.map((n) => n.w));
@@ -511,20 +523,25 @@ async function loadBrain() {
         sigs.length ? el("span", { class: "m" }, ...sigs) : null,
         el("div", { class: "fade", title: `消えるまで あと ${h.days_left} 日` }, el("i", { style: `width:${left * 100}%` })));
     }) : [li({ class: "empty" }, "いま海馬にある情報はありません。")]));
-    // C. cortex
+    // C. cortex: three boxes, links cross them freely
     const k = b.cortex.kinds;
     $("#c-cortex").textContent = pad(k.procedural + k.semantic + k.episode, 2);
-    $("#cortex-kinds").textContent = `ルール・やり方 ${k.procedural} · 事実・決定 ${k.semantic} · 出来事 ${k.episode}。濃いものほど強い記憶。`;
-    const top = b.cortex.memories;
-    const maxS = Math.max(0.01, ...top.map((n) => n.importance * n.base_strength + 0.1 * (n.goods + n.corrections)));
-    $("#l-cortex").replaceChildren(...(top.length ? top.map((n) => {
-      const strength = (n.importance * n.base_strength + 0.1 * (n.goods + n.corrections)) / maxS;
-      const bits = [KIND_JA[n.kind], n.promoted_by ? `${PROMOTED_JA[n.promoted_by] || n.promoted_by}で記憶` : null,
-        n.goods ? `褒められた ${n.goods}` : null, n.corrections ? `注意された ${n.corrections}` : null,
-        n.occurrences > 1 ? `再登場 ${n.occurrences}` : null, n.pinned ? "固定" : null].filter(Boolean);
-      return li({ class: "clickable", style: `opacity:${(0.35 + 0.65 * strength).toFixed(2)}`,
-        on: { click: () => { showTab("graph"); setTimeout(() => selectNode(n.id), 400); } } }, t(n.body), m(bits.join(" · ")));
-    }) : [li({ class: "empty" }, "まだ記憶はありません。今夜の睡眠で、海馬から移ってきます。")]));
+    const score = (n) => n.importance * n.base_strength + 0.1 * (n.goods + n.corrections);
+    const maxS = Math.max(0.01, ...b.cortex.memories.map(score));
+    const EMPTY = { procedural: "まだありません。注意されたこと・好み・やり方がここに入ります。",
+      semantic: "まだありません。決定や事実がここに入ります。", episode: "まだありません。出来事や、記憶を書き換えた経緯がここに入ります。" };
+    for (const kind of ["procedural", "semantic", "episode"]) {
+      const mem = b.cortex.memories.filter((n) => n.kind === kind);
+      $(`#n-${kind}`).textContent = ` ${k[kind]}`;
+      $(`#l-${kind}`).replaceChildren(...(mem.length ? mem.map((n) => {
+        const bits = [n.promoted_by ? `${PROMOTED_JA[n.promoted_by] || n.promoted_by}で記憶` : null,
+          n.goods ? `褒められた ${n.goods}` : null, n.corrections ? `注意された ${n.corrections}` : null,
+          n.occurrences > 1 ? `再登場 ${n.occurrences}` : null, n.revisions ? `書き換え ${n.revisions}` : null,
+          n.pinned ? "固定" : null].filter(Boolean);
+        return li({ class: "clickable", style: `opacity:${(0.35 + 0.65 * score(n) / maxS).toFixed(2)}`,
+          on: { click: () => { showTab("graph"); setTimeout(() => selectNode(n.id), 400); } } }, t(n.body), m(bits.join(" · ")));
+      }) : [li({ class: "empty" }, EMPTY[kind])]));
+    }
     // D. bookshelf
     const shelf = Object.entries(b.bookshelf);
     $("#c-shelf").textContent = pad(shelf.reduce((a, [, n]) => a + n, 0), 2);

@@ -189,3 +189,57 @@ def test_cortex_is_recalled_by_meaning(brain, session):
     assert encode_nodes(brain) == 1
     r = brain.recall(session, "結論から書くメールの文章")
     assert nid in r["memory_ids"] and r["searched"] == ["大脳皮質"]
+
+
+# ---- reconsolidation (spec v0.6) ------------------------------------------------------------------
+
+
+def test_recalled_memory_is_rewritten_with_the_episode_of_why(brain, session, settings):
+    old = brain.remember_explicit(session, "納品物は PDF と PNG の両方で渡す", "semantic", ["納品"])["node_id"]
+    links_before = {(e["src"], e["dst"], e["kind"]) for e in brain.edges_of(old)}
+    r = brain.revise_memory(session, old, "納品物は PDF だけで渡す", "オーナーが PNG は不要と言った",
+                            owner_words="PNG はもう要らない、PDF だけでいい")
+    n = brain.node(old)
+    assert n["body"] == "納品物は PDF だけで渡す" and n["status"] == "active"  # same memory, same id
+    assert links_before <= {(e["src"], e["dst"], e["kind"]) for e in brain.edges_of(old)}  # links kept
+    ep = brain.node(r["episode_id"])
+    assert ep["kind"] == "episode" and ep["promoted_by"] == "reconsolidation"
+    assert "PDF と PNG の両方" in ep["body"] and "PDF だけ" in ep["body"] and "PNG は不要" in ep["body"]
+    assert any(e["kind"] == "revised_in" and r["episode_id"] in (e["src"], e["dst"]) for e in brain.edges_of(old))
+    rev = brain._conn.execute("SELECT old_body, new_body, reason FROM revisions WHERE node_id = ?", (old,)).fetchone()
+    assert tuple(rev) == ("納品物は PDF と PNG の両方で渡す", "納品物は PDF だけで渡す", "オーナーが PNG は不要と言った")
+    assert brain.open_source(r["source_id"])["body"].startswith("PNG はもう要らない")  # the evidence is on the shelf
+    # The history survives a rebuild, and the cortex copy shows it.
+    snap = brain.snapshot()
+    brain.rebuild()
+    assert brain.snapshot()["revisions"] == snap["revisions"] and brain.node(old)["body"] == "納品物は PDF だけで渡す"
+    export(brain)
+    note = next((settings.drive_root / "大脳皮質" / "意味記憶").glob("*.md")).read_text(encoding="utf-8")
+    assert "書き換えの履歴" in note and "前: 納品物は PDF と PNG の両方で渡す" in note
+
+
+def test_rewriting_needs_evidence_and_a_real_change(brain, session):
+    import pytest
+
+    from exobrain.brain import InvalidInput
+
+    nid = brain.remember_explicit(session, "会議は月曜")["node_id"]
+    with pytest.raises(InvalidInput, match="根拠"):
+        brain.revise_memory(session, nid, "会議は火曜", "変わったらしい")
+    with pytest.raises(InvalidInput, match="同じ"):
+        brain.revise_memory(session, nid, "会議は月曜", "確認", owner_words="月曜だよ")
+    with pytest.raises(InvalidInput, match="本棚にありません"):
+        brain.revise_memory(session, nid, "会議は火曜", "原文にあった", source_id="src_nothere")
+
+
+def test_erasing_a_rewritten_memory_takes_its_history_too(brain, session):
+    nid = brain.remember_explicit(session, "取引先の担当は佐藤さん")["node_id"]
+    r = brain.revise_memory(session, nid, "取引先の担当は鈴木さん", "担当が変わった", owner_words="担当は鈴木さんに変わった")
+    plan = safety.plan_erase(brain, node_ids=[nid])
+    assert {x["id"] for x in plan["nodes"]} >= {nid, r["episode_id"]}
+    safety.erase(brain, plan, safety.CONFIRM_PHRASE)
+    # The memory and the episode of its rewriting are gone; the owner's original words stay on the bookshelf
+    # until the original itself is erased (erasing a memory never erases a record).
+    left = brain._conn.execute("SELECT COUNT(*) FROM events WHERE type IN ('node_added', 'node_revised', 'node_sourced')"
+                               " AND payload_json LIKE '%佐藤%'").fetchone()[0]
+    assert left == 0 and brain.verify()[0]

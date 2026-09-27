@@ -9,7 +9,7 @@
 | ID | 資料 | 取り込み方 |
 |---|---|---|
 | S1 | 2026-09-27、このセッションでのオーナーの発言（文体と仕事の好み） | Claude Code の日報として取り込む |
-| S2 | `docs/spec-v0.5.md`（統合仕様書 v0.5） | 本棚に取り込む |
+| S2 | `docs/spec-v0.6.md`（統合仕様書 v0.5） | 本棚に取り込む |
 | S3 | `OUTBRAIN_v0.4_spec.md` | OUTBRAIN からの移行で取り込む |
 | S4 | note「AIのお作法」Vol.05 下書き（https://claude.ai/artifact/FaB1Ka3CruPTrtG66JfRWQ） | 本棚に取り込む |
 | S5 | `CLAUDE_AI_DAILY_HANDOFF.md` と `AI_DAILY_LOG_PROTOCOL.md`（OUTBRAIN） | OUTBRAIN からの移行で取り込む |

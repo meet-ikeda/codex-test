@@ -155,7 +155,14 @@ class App:
                                                         "corrections", "importance", "base_strength",
                                                         "access_count", "created_at", "created_by",
                                                         "last_activated_at")}},
-                "neighbors": nbrs[:40], "source": source, "shelves": shelves}
+                "neighbors": nbrs[:40], "source": source, "shelves": shelves,
+                "revisions": [dict(r) for r in b._conn.execute(
+                    "SELECT at, old_body, new_body, reason, episode_id, source_id, actor FROM revisions"
+                    " WHERE node_id = ? ORDER BY at DESC", (node_id,))],
+                "quotes": [dict(r) for r in b._conn.execute(
+                    "SELECT ns.quote, ns.line_start, ns.line_end, s.id AS source_id, s.title, s.created_at"
+                    " FROM node_sources ns JOIN sources s ON s.id = ns.source_id WHERE ns.node_id = ?"
+                    " ORDER BY ns.at", (node_id,))]}
 
     # ---- bookshelf --------------------------------------------------------------------
 
@@ -289,12 +296,15 @@ class App:
                               "memories": r["memories"], "chunks": r["chunks"]})
             kinds = {k: c.execute("SELECT COUNT(*) FROM nodes WHERE kind = ? AND status = 'active'", (k,)).fetchone()[0]
                      for k in ("procedural", "semantic", "episode")}
-            memories = [dict(r) for r in c.execute(
-                "SELECT id, kind, body, promoted_by, importance, base_strength, goods, corrections, occurrences,"
-                " pinned, created_at, access_count FROM nodes WHERE status = 'active'"
-                " AND kind IN ('procedural', 'semantic', 'episode')"
-                " ORDER BY pinned DESC, importance * base_strength + 0.1 * goods + 0.1 * corrections DESC,"
-                " created_at DESC LIMIT 40")]
+            memories = []
+            for k in ("procedural", "semantic", "episode"):  # each box shows its strongest
+                memories += [dict(r) for r in c.execute(
+                    "SELECT n.id, n.kind, n.body, n.promoted_by, n.importance, n.base_strength, n.goods, n.corrections,"
+                    " n.occurrences, n.pinned, n.created_at, n.access_count,"
+                    " (SELECT COUNT(*) FROM revisions r WHERE r.node_id = n.id) AS revisions"
+                    " FROM nodes n WHERE n.status = 'active' AND n.kind = ?"
+                    " ORDER BY n.pinned DESC, n.importance * n.base_strength + 0.1 * n.goods + 0.1 * n.corrections DESC,"
+                    " n.created_at DESC LIMIT 20", (k,))]
             shelf = {r[0]: r[1] for r in c.execute("SELECT kind, COUNT(*) FROM sources WHERE erased = 0 GROUP BY kind")}
             flow = {
                 "received": c.execute("SELECT COUNT(*) FROM sources WHERE created_at >= ? AND kind != 'dream'",
