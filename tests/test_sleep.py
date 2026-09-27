@@ -348,3 +348,13 @@ def test_sleep_through_claude_code(brain, settings, session, tmp_path):
     assert out["usage"]["output_tokens"] == 200 and out["usage"]["cost_usd"] == 0.12
     copy = settings.drive_root / "大脳皮質"
     assert (copy / "大脳皮質.md").exists() and any((copy / "手続き記憶").glob("資料は PDF で共有する__*.md"))
+
+
+def test_a_sleep_without_ai_does_not_make_the_night_skip(brain):
+    sleep.run(brain, use_ai=False)
+    assert sleep.last_sleep(brain) is not None
+    assert sleep.is_due(brain)  # the scheduled AI sleep still runs tonight
+    sleep.run(brain, runner=lambda b, r: "AI による整理が異常終了しました（テスト）")
+    assert sleep.is_due(brain)  # a failed AI sleep does not count either
+    sleep.run(brain, runner=lambda b, r: "")
+    assert not sleep.is_due(brain)

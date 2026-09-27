@@ -93,8 +93,22 @@ def last_sleep(brain: Brain) -> datetime | None:
     return datetime.fromisoformat(row[0]) if row and row[0] else None
 
 
+# A sleep whose summary starts like this did not get its AI work done: it does not count as "slept" for the
+# nightly schedule, so a manual sleep without AI (or a failed one) never makes the night's AI sleep skip.
+NOT_A_FULL_SLEEP = ("AI による整理は行わない", "AI による整理が", "Claude Code が見つからない",
+                    "Claude Code のログインが切れて")
+
+
+def last_full_sleep(brain: Brain) -> datetime | None:
+    for (finished, summary) in brain._conn.execute(
+            "SELECT finished_at, summary FROM sleep_runs WHERE finished_at IS NOT NULL ORDER BY finished_at DESC"):
+        if not (summary or "").startswith(NOT_A_FULL_SLEEP):
+            return datetime.fromisoformat(finished)
+    return None
+
+
 def is_due(brain: Brain, now: datetime | None = None, hours: float = DUE_AFTER_HOURS) -> bool:
-    last = last_sleep(brain)
+    last = last_full_sleep(brain)
     now = now or datetime.now(timezone.utc)
     return last is None or now - last >= timedelta(hours=hours)
 

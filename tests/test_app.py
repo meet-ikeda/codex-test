@@ -121,7 +121,8 @@ def test_sleep_button(served):
         if not s["running"]:
             break
         time.sleep(0.05)
-    assert s["result"]["journal"] and s["dreams"] and not s["due"]
+    # A sleep without AI is recorded, but the night's AI sleep is still due.
+    assert s["result"]["journal"] and s["dreams"] and s["due"]
 
 
 def test_pause_verify_backup_restore(served):
