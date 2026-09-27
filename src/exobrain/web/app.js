@@ -566,8 +566,7 @@ async function loadSleep() {
     else status.replaceChildren(cap(s.due ? "Time to sleep — そろそろ眠る時間です" : "Awake — 前回の睡眠"), s.last_sleep ? when(s.last_sleep) : "Never slept.");
     if (s.result && s.result.note) status.append(el("span", { class: "hint" }, s.result.note));
     $("#sleep-ai").disabled = s.running || !s.claude_found;
-    $("#sleep-noai").disabled = s.running;
-    $("#sleep-claude").textContent = s.claude_found ? "AI による整理には Claude Code（Claude Pro の利用枠）を使います。"
+    $("#sleep-claude").textContent = s.claude_found ? "タイマーを待たずに、いま AI（Claude Code）で記憶を整理します。日報づくり・昇格・整理まで、夜の睡眠と同じことをします（Claude の利用枠を使います）。"
       : "Claude Code が見つからないため、AI による整理はできません（AI なしの整理は使えます）。";
     const hhmm = s.timer ? `${pad(s.timer.hour, 2)}:${pad(s.timer.minute, 2)}` : null;
     $("#timer-status").textContent = hhmm ? `Every day at ${hhmm}` : "Timer off — タイマーは切れています";
@@ -595,7 +594,6 @@ async function goToSleep(useAi) {
   });
 }
 $("#sleep-ai").addEventListener("click", () => goToSleep(true));
-$("#sleep-noai").addEventListener("click", () => goToSleep(false));
 $("#timer-set").addEventListener("click", async () => {
   const [h, m] = ($("#timer-time").value || "").split(":").map(Number);
   if (Number.isNaN(h)) return toast("時刻を選んでください。", true);

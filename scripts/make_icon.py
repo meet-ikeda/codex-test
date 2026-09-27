@@ -1,5 +1,5 @@
-"""The exobrain app icon: a brain in profile drawn as a network — memories (dots) and links (lines),
-black on a white macOS-style tile. The outline is the same one the opening's particles gather into.
+"""The exobrain app icon: a low-poly brain in profile (grey facets lit from the upper left, white seams)
+over the EXOBRAIN logotype, on a white macOS-style tile. The outline is the one the opening's particles gather into.
 
 Usage: python scripts/make_icon.py <out_dir>   (needs Pillow, SciPy, numpy; writes icon-1024.png and exobrain.icns)
 """
@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from scipy.spatial import Delaunay
 
 S = 2048  # drawn at 2x, then reduced: smooth edges
@@ -68,18 +68,19 @@ def main(out: Path) -> None:
     d = ImageDraw.Draw(img)
     d.rounded_rectangle(box, radius, fill=(255, 255, 255, 255), outline=(222, 222, 222, 255), width=4)
 
-    # Map the stencil into the tile.
-    scale = (box[2] - box[0]) * 0.78 / 800
-    ox = S / 2 - 525 * scale
-    oy = S / 2 - 375 * scale
+    # Map the stencil into the tile (the brain sits high; the logo goes underneath).
+    scale = (box[2] - box[0]) * 0.70 / 800
+    ox = S / 2 - 520 * scale
+    oy = S * 0.43 - 360 * scale
     tr = lambda p: (ox + p[0] * scale, oy + p[1] * scale)  # noqa: E731
     cerebrum = [tr(p) for p in brain_outline()]
     cerebellum = [tr(p) for p in ellipse(262, 520, 118, 68, -0.12)]
-    stem = [tr(p) for p in ((378, 470), (422, 470), (434, 640), (402, 642))]
+    # Cerebrum and a brainstem growing out from inside it (the low-poly look reads best without the cerebellum).
+    stem = [tr(p) for p in ((392, 420), (446, 420), (456, 612), (420, 620))]
 
     mask = Image.new("L", (S, S), 0)
     md = ImageDraw.Draw(mask)
-    for poly in (cerebrum, cerebellum, stem):
+    for poly in (cerebrum, stem):
         md.polygon(poly, fill=255)
     m = np.array(mask) > 0
     cmask = Image.new("L", (S, S), 0)
@@ -87,47 +88,56 @@ def main(out: Path) -> None:
     cm = np.array(cmask) > 0
     m_cerebrum = lambda p: cm[int(p[1]), int(p[0])]  # noqa: E731
 
-    # Memories: points on the outline (so the silhouette reads) and scattered inside (Poisson-disk-ish).
-    min_d = S * 0.055
-    nodes = even(cerebrum, min_d * 1.05)
-    # the cerebellum's outline, only where it shows below the cerebrum
-    nodes += [p for p in even(cerebellum, min_d * 0.95) if not m_cerebrum(p)]
-    cx0 = (stem[0][0] + stem[1][0]) / 2
-    nodes += [(cx0 + (stem[3][0] - stem[0][0]) * 0.35 * k, stem[0][1] + (stem[3][1] - stem[0][1]) * k)
-              for k in (0.45, 0.95)]
+    # Facet corners: the outline at even steps, a little jitter so the edge reads as cut, and points inside.
+    step = S * 0.058
+    nodes = [(x + random.uniform(-6, 6), y + random.uniform(-6, 6)) for x, y in even(cerebrum, step)]
+    nodes += [p for p in even(stem, step * 0.8) if not m_cerebrum(p)]
+    nodes += stem[2:]
     tries = 0
     while tries < 20000:
         tries += 1
         x, y = random.uniform(box[0], box[2]), random.uniform(box[1], box[3])
-        if not m[int(y), int(x)]:
-            continue
-        if all((x - a) ** 2 + (y - b) ** 2 > min_d ** 2 for a, b in nodes):
+        if m[int(y), int(x)] and all((x - a) ** 2 + (y - b) ** 2 > (step * 0.95) ** 2 for a, b in nodes):
             nodes.append((x, y))
     P = np.array(nodes)
 
-    # Links: a Delaunay mesh, keeping short edges that stay inside the brain.
-    edges = set()
-    for tri in Delaunay(P).simplices:
-        for i in range(3):
-            a, b = sorted((tri[i], tri[(i + 1) % 3]))
-            edges.add((a, b))
-    lines = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(lines)
-    for a, b in edges:
-        (x1, y1), (x2, y2) = P[a], P[b]
-        if math.hypot(x2 - x1, y2 - y1) > min_d * 2.1:
-            continue
-        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-        if not m[int(my), int(mx)]:
-            continue
-        ld.line((x1, y1, x2, y2), fill=(10, 10, 10, 135), width=4)
-    img.alpha_composite(lines)
+    # Soft shadow under the brain.
+    lo = max(y for _, y in stem)
+    sh = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    ImageDraw.Draw(sh).ellipse((S * 0.30, lo + S * 0.035, S * 0.70, lo + S * 0.065), fill=(0, 0, 0, 60))
+    img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(S * 0.012)))
 
-    # Dots: most small, a few strong memories larger.
+    # Facets: light from the upper left, each face a slightly different grey.
+    xs, ys = P[:, 0], P[:, 1]
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    facets = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    fd = ImageDraw.Draw(facets)
+    for poly in (cerebrum, stem):  # a base tone under the facets, so no gap shows through at the edge
+        fd.polygon(poly, fill=(185, 185, 185, 255))
+    tris = []
+    for tri in Delaunay(P).simplices:
+        pts = [tuple(P[i]) for i in tri]
+        cx, cy = sum(p[0] for p in pts) / 3, sum(p[1] for p in pts) / 3
+        if not m[int(cy), int(cx)]:
+            continue
+        t = 0.55 * (cx - x0) / (x1 - x0) + 0.45 * (cy - y0) / (y1 - y0)  # 0 = upper left, 1 = lower right
+        g = int(max(88, min(250, 246 - 150 * t + random.uniform(-26, 26))))
+        fd.polygon(pts, fill=(g, g, g, 255))
+        tris.append(pts)
+    for pts in tris:  # hairline seams between the faces
+        fd.line(pts + [pts[0]], fill=(255, 255, 255, 150), width=3)
+    img.alpha_composite(facets)
+
+    # The logo: EXOBRAIN in gothic, widely spaced.
+    font = ImageFont.truetype("/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc", int(S * 0.066))
+    text, track = "EXOBRAIN", S * 0.020
+    widths = [font.getlength(ch) for ch in text]
+    total = sum(widths) + track * (len(text) - 1)
+    x, y = S / 2 - total / 2, lo + S * 0.085
     d = ImageDraw.Draw(img)
-    for i, (x, y) in enumerate(nodes):
-        r = S * (0.0095 if random.random() < 0.14 else 0.0058)
-        d.ellipse((x - r, y - r, x + r, y + r), fill=(10, 10, 10, 255))
+    for ch, w in zip(text, widths):
+        d.text((x, y), ch, font=font, fill=(17, 17, 17, 255))
+        x += w + track
 
     big = img.resize((1024, 1024), Image.LANCZOS)
     big.save(out / "icon-1024.png")
