@@ -45,6 +45,7 @@ NODE_SEED_MIN = 0.5  # bge-m3 cosine: a cortex memory this close to the cue star
 NODE_FOUND_MIN = 0.62  # ...and this close counts as the cortex having answered (no need to look further)
 NODE_SEEDS_MAX = 20
 REVISION_LINK = 0.8  # a memory and the episode of rewriting it stay closely tied
+AUTO_LOGGED_AIS = ("codex", "claude code", "cowork")  # their conversations are read from this Mac every night
 FALLBACK_KEEP = 0.6  # share of the recall budget the cortex keeps when records are looked up too
 
 ELEMENT_KINDS = ("episode", "semantic", "procedural")
@@ -448,7 +449,7 @@ class Brain:
     def _index_chunks(self, source_id: str, body: str, kind: str | None = None) -> None:
         from .chunks import chunk_document, lexical_tokens
 
-        for ch in chunk_document(body, every_heading=kind == "ai_daily"):
+        for ch in chunk_document(body, every_heading=kind in ("ai_daily", "deposit")):
             # The id carries the text's hash: if chunking changes, stale vectors can never attach to new text.
             cid = f"{source_id}#{ch.idx}:{hashlib.sha256(ch.text.encode()).hexdigest()[:10]}"
             self._conn.execute(
@@ -697,6 +698,30 @@ class Brain:
                 "message_to_user": f"記憶を書き換えました: 「{n['body']}」→「{new_text}」（理由: {reason}）。"
                                    "書き換えた経緯も出来事として覚えました。前の内容は履歴に残っています。"}
 
+    def deposit(self, session_id: str, thread_title: str, summary: str, procedural: list[str], semantic: list[str],
+                episodes: list[str], note_type: str = "", confidential: bool = False) -> dict[str, Any]:
+        """`/預けて`: the owner hands this thread over. The AI summarises it into the three kinds of memory;
+        it goes to the receiving box and the hippocampus, and every part is a promotion candidate."""
+        from . import deposit as dep
+        from .inbox import file_deposit
+
+        ai_name = self.session_ai(session_id)
+        self._require_writable()
+        if note_type not in dep.NOTE_TYPES:
+            raise InvalidInput("note_type は ''（オーナー自身の話）・'interview'（取材）・'client'（クライアント）のどれかです。")
+        if not (summary.strip() or procedural or semantic or episodes):
+            raise InvalidInput("預ける中身が空です。")
+        source, _ = _ai_source(ai_name)
+        text = dep.render(source, thread_title.strip() or "無題のスレッド",
+                          {"summary": summary, "procedural": procedural, "semantic": semantic, "episode": episodes},
+                          note_type, confidential)
+        r = file_deposit(self, text, actor=f"ai:{ai_name}")
+        if r is None:
+            return {"filed": False, "message_to_user": "同じ内容はすでに預かっています。"}
+        where = "本棚にだけ置きました（機密のため、大脳皮質には移しません）" if confidential else \
+            "今夜の睡眠で、大脳皮質に移ります"
+        return {"filed": True, **r, "message_to_user": f"預かりBOX に受け取りました。{where}。"}
+
     def submit_daily_log(self, session_id: str, thread_title: str, events_: list[str], corrections: list[str],
                          learnings: list[str], decisions: list[str], unresolved: list[str],
                          ai_model: str = "unknown", thread_id: str | None = None) -> dict[str, Any]:
@@ -710,6 +735,9 @@ class Brain:
 
         ai_name = self.session_ai(session_id)
         self._require_writable()
+        if self.settings.daily_logs_since and any(k in ai_name.casefold() for k in AUTO_LOGGED_AIS):
+            raise InvalidInput(f"{ai_name} の会話は、毎晩の睡眠で自動的に日報にしています。/日報 は要りません"
+                               "（送ると同じ会話が二重に入ります）。オーナーにそう伝えてください。")
         started = self._conn.execute("SELECT started_at FROM sessions WHERE id = ?", (session_id,)).fetchone()[0]
         source, provider = _ai_source(ai_name)
         fields = {"source": source, "ai_provider": provider, "ai_product": ai_name, "ai_agent": ai_name,

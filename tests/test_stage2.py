@@ -350,3 +350,89 @@ def test_backfill_takes_only_the_past_and_never_twice(tmp_path, monkeypatch):
         assert sleep.backfill_queue(b) == []  # finished threads leave the queue
         titles = [r[0] for r in b._conn.execute("SELECT title FROM sources WHERE kind = 'ai_daily' ORDER BY title")]
         assert sum("過去分" not in t for t in titles) == 1 and sum("過去分" in t for t in titles) >= 2
+
+
+def test_daily_log_command_is_refused_where_logs_are_automatic(tmp_path):
+    import pytest
+
+    from exobrain.brain import InvalidInput
+
+    s = Settings(home=tmp_path / "h", drive_root=tmp_path / "d", embed_model="", daily_logs_since="2026-09-27")
+    with Brain(s) as b:
+        codex = b.start_session("Codex")["session_id"]
+        with pytest.raises(InvalidInput, match="自動的に日報"):
+            b.submit_daily_log(codex, "題", ["x"], [], [], [], [])
+        chat = b.start_session("Claude Desktop")["session_id"]
+        assert b.submit_daily_log(chat, "題", ["x"], [], [], [], [])["filed"]  # chats are not on this Mac
+
+
+# ---- deposits: /預けて in Claude's chat, or a file from ChatGPT / Gemini ---------------------------------
+
+
+def test_deposit_from_chat_goes_through_the_hippocampus_as_explicit(brain, session):
+    r = brain.deposit(session, "採用サイトの相談", "採用サイトの構成を相談した。",
+                      ["見出しは短くする"], ["オーナーはA社の採用サイトの構成を考えている"], ["9/27 に構成案を2つ出した"])
+    assert r["filed"] and "今夜の睡眠" in r["message_to_user"]
+    run_id, _ = sleep.start(brain)
+    batch = sleep.next_batch(brain, sleep.SleepState(run_id))
+    items = [i for i in batch["items"] if i["type"] == "promote"]
+    assert items and all(i["signal"] == "explicit" and i["max_atoms"] == 8 for i in items)
+    assert "預けると決めた会話" in items[0]["instructions"]
+    assert brain.deposit(session, "採用サイトの相談", "採用サイトの構成を相談した。", ["見出しは短くする"],
+                         ["オーナーはA社の採用サイトの構成を考えている"], ["9/27 に構成案を2つ出した"])["filed"] is False
+
+
+def test_deposit_file_from_chatgpt_is_picked_up_from_downloads(tmp_path):
+    import os
+    import time
+
+    from exobrain import deposit
+    from exobrain.inbox import ingest
+
+    dl = tmp_path / "Downloads"
+    dl.mkdir()
+    text = deposit.render("chatgpt", "取材の振り返り", {"summary": "取材を振り返った", "episode": ["取材相手の佐藤さんは迷った"]},
+                          note_type="interview", confidential=True)
+    (dl / "exobrain-預け入れ.md").write_text(text, encoding="utf-8")
+    old = time.time() - 10
+    os.utime(dl / "exobrain-預け入れ.md", (old, old))
+    with Brain(Settings(home=tmp_path / "h", drive_root=tmp_path / "d", embed_model="", downloads_dir=dl)) as b:
+        added = ingest(b)
+        assert [a["kind"] for a in added] == ["deposit"]
+        row = b._conn.execute("SELECT ai_name, meta_json FROM sources").fetchone()
+        assert row[0] == "ChatGPT" and json.loads(row[1])["note_type"] == "interview"
+        assert b._conn.execute("SELECT COUNT(*) FROM hippocampus").fetchone()[0] == 0  # 機密: bookshelf only
+        assert not any(dl.iterdir())
+
+
+# ---- the Obsidian plugin: sent notes, and stamped notes left alone by the tag scan ------------------------
+
+
+def test_note_sent_by_the_obsidian_plugin_is_filed_with_its_counter_answers(tmp_path):
+    import os
+    import time
+
+    from exobrain.inbox import ingest, scan_vault
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "佐藤さん.md").write_text("---\nexobrain受領: 2026-09-27 15:10 全文\n---\n#remember\n迷った話\n", encoding="utf-8")
+    s = Settings(home=tmp_path / "h", drive_root=tmp_path / "d", embed_model="", vault_root=vault)
+    with Brain(s) as b:
+        box = s.inbox / "Obsidian"
+        box.mkdir(parents=True)
+        sent = ('---\nexobrain_kind: obsidian_note\nexobrain_source_file: "取材/佐藤さん.md"\n'
+                'exobrain_note_type: "interview"\nexobrain_subject: "佐藤さん（入社3年目）"\nexobrain_confidential: false\n'
+                'exobrain_part: "差分（2026-09-27 15:10 以降）"\n---\n# 入社の理由\n- 建設会社を3社比べた\n')
+        (box / "202609271520_佐藤さん_差分.md").write_text(sent, encoding="utf-8")
+        old = time.time() - 10
+        os.utime(box / "202609271520_佐藤さん_差分.md", (old, old))
+        os.utime(vault / "佐藤さん.md", (old, old))
+        added = ingest(b)
+        assert [a["title"] for a in added] == ["佐藤さん（差分（2026-09-27 15:10 以降））"]
+        meta = json.loads(b._conn.execute("SELECT meta_json FROM sources").fetchone()[0])
+        assert meta["note_type"] == "interview" and meta["subject"] == "佐藤さん（入社3年目）" and meta["via"] == "obsidian-plugin"
+        assert scan_vault(b) == []  # the stamped note is the plugin's: the #remember scan leaves it alone
+        run_id, _ = sleep.start(b)
+        item = next(i for i in sleep.next_batch(b, sleep.SleepState(run_id))["items"] if i["type"] == "promote")
+        assert "佐藤さん（入社3年目）" in item["instructions"] and item["note_type"] == "interview"

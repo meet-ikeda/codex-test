@@ -25,7 +25,7 @@ SECTIONS = (
     ("unresolved", "未解決・次に続くこと"),
 )
 _FRONT = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
-_KEY = re.compile(r"^([A-Za-z0-9_]+):\s*(.*)$")
+_KEY = re.compile(r"^([^\s:#\-][^:]*?):\s*(.*)$")  # Japanese keys too (the plugin's receipt: exobrain受領)
 _TITLE = re.compile(r"^#\s+AI日報\s*·\s*(.+?)\s*·\s*\d{4}-\d{2}-\d{2}\s*$", re.M)
 
 

@@ -115,7 +115,7 @@ def _threads(brain, a) -> int:
     from .inbox import current_cursor
 
     st = brain.settings
-    threads = transcripts.local_threads(st.codex_sessions, st.claude_projects)
+    threads = transcripts.local_threads(st.codex_sessions, st.claude_projects, st.cowork_sessions)
     before = transcripts.since_utc(st.daily_logs_since) if st.daily_logs_since else "9999"
     queue = sleep.backfill_queue(brain)
     local = lambda iso: datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")  # noqa: E731

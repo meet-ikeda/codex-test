@@ -608,7 +608,30 @@ $("#timer-set").addEventListener("click", async () => {
 $("#timer-off").addEventListener("click", async () => {
   await guarded(async () => { await api("/api/sleep/timer", { off: true }); toast("タイマーを切りました。"); loadSleep(); });
 });
-loaders.sleep = loadSleep;
+loaders.sleep = () => { loadSleep(); loadThreads(); };
+
+let thTimer;
+async function loadThreads() {
+  await guarded(async () => {
+    const q = $("#th-search").value.trim();
+    const r = await api(`/api/threads${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+    $("#threads").replaceChildren(...r.threads.slice(0, 40).map((th, i) => {
+      const btn = el("button", { class: "link cap", on: { click: async () => {
+        await guarded(async () => {
+          await api("/api/backfill", { keys: [th.key], cancel: th.queued });
+          toast(th.queued ? "取り込み待ちから外しました。" : `「${th.title}」を預かりました。次の睡眠から日報にします。`);
+          loadThreads();
+        });
+      } } }, th.queued ? "取り込み待ち — 外す" : th.past_left ? "預ける" : "");
+      return el("li", {}, el("span", { class: "n" }, `No. ${pad(i + 1)}`),
+        el("span", { class: "row" }, el("span", { class: "title" }, th.title),
+          th.past_left || th.queued ? btn : el("span", { class: "hint" }, "預ける過去分はありません")),
+        el("span", { class: "meta" }, `${th.ai} — ${when(th.first, false)} 〜 ${when(th.last, false)} — 過去分 ${th.past_left} 発言`));
+    }));
+    if (!r.threads.length) $("#threads").append(el("li", { class: "muted" }, "見つかりません"));
+  });
+}
+$("#th-search").addEventListener("input", () => { clearTimeout(thTimer); thTimer = setTimeout(loadThreads, 300); });
 
 // ---- safeguards --------------------------------------------------------------------
 

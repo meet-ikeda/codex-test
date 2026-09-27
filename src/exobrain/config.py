@@ -47,6 +47,7 @@ class Settings:
     daily_logs_since: str | None = None
     codex_sessions: Path | None = None
     claude_projects: Path | None = None
+    cowork_sessions: Path | None = None
 
     @property
     def db_path(self) -> Path:
@@ -98,4 +99,6 @@ def load_settings() -> Settings:
         daily_logs_since=cfg.get("daily_logs_since"),
         codex_sessions=path_or_none(cfg.get("codex_sessions", "~/.codex/sessions")),
         claude_projects=path_or_none(cfg.get("claude_projects", "~/.claude/projects")),
+        cowork_sessions=path_or_none(cfg.get("cowork_sessions",
+                                             "~/Library/Application Support/Claude/local-agent-mode-sessions")),
     )

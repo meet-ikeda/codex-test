@@ -118,6 +118,51 @@ def file_daily(brain: Brain, text: str, origin_file: str | None = None, actor: s
         )
 
 
+def file_deposit(brain: Brain, text: str, origin_file: str | None = None, actor: str | None = None) -> dict | None:
+    """File a deposit (spec v0.6 §5.4). The owner chose it: every part is a promotion candidate, unless #機密."""
+    from . import deposit
+    from .brain import InvalidInput
+
+    meta = deposit.meta_of(daily.front_matter(text))
+    if meta is None:
+        raise InvalidInput("預け入れの形式ではありません（先頭に exobrain_kind: deposit がありません）。")
+    ai = {"chatgpt": "ChatGPT", "claude": "Claude", "gemini": "Gemini"}.get(meta["source"].casefold(), meta["source"])
+    return add_source(brain, kind="deposit", author="ai", ai_name=ai, title=f"預け入れ · {meta['thread_title']}",
+                      body=text, actor=actor or f"ai:{ai}", origin_file=origin_file, meta=meta,
+                      hippocampus=not meta.get("confidential"))
+
+
+PLUGIN_STAMP = "exobrain受領"  # frontmatter key the Obsidian plugin stamps on notes it has sent
+OBSIDIAN_DIR = "Obsidian"  # where the plugin drops them inside the receiving box
+
+
+def file_obsidian_note(brain: Brain, text: str, origin_file: str | None = None) -> dict | None:
+    """A note sent with the Obsidian plugin (whole, or the part added since its last stamp)."""
+    fm = daily.front_matter(text)
+    note_type = {"interview": "interview", "client": "client"}.get(str(fm.get("exobrain_note_type") or ""))
+    confidential = str(fm.get("exobrain_confidential", "")).lower() in ("true", "1")
+    subject = str(fm.get("exobrain_subject") or "").strip()
+    src_file = str(fm.get("exobrain_source_file") or origin_file or "")
+    part = str(fm.get("exobrain_part") or "全文")
+    meta = {"via": "obsidian-plugin", "part": part, **({"note_type": note_type} if note_type else {}),
+            **({"subject": subject} if subject else {}), **({"confidential": True} if confidential else {})}
+    title = Path(src_file).stem or "Obsidian のノート"
+    return add_source(brain, kind="remember_note", author="human", ai_name=None,
+                      title=title + ("" if part == "全文" else f"（{part}）"), body=text, origin_file=src_file,
+                      meta=meta, hippocampus=not confidential)
+
+
+def _kind_of(text: str) -> str:
+    fm = daily.front_matter(text)
+    if fm.get("exobrain_kind") == "obsidian_note":
+        return "obsidian_note"
+    if fm.get("outbrain_kind") == "ai_daily":
+        return "ai_daily"
+    if fm.get("exobrain_kind") == "deposit":
+        return "deposit"
+    return "memo"
+
+
 # ---- folders ----------------------------------------------------------------------------------
 
 
@@ -157,8 +202,13 @@ def _take_from_inbox(brain: Brain, path: Path, now: float) -> dict | None:
         _set_aside(claimed, path.name)
         return None
     try:
-        if daily.front_matter(text).get("outbrain_kind") == "ai_daily":
+        kind = _kind_of(text)
+        if kind == "ai_daily":
             result = file_daily(brain, text, origin_file=path.relative_to(inbox).as_posix())
+        elif kind == "deposit":
+            result = file_deposit(brain, text, origin_file=path.relative_to(inbox).as_posix())
+        elif kind == "obsidian_note":
+            result = file_obsidian_note(brain, text)
         else:
             result = add_memo(brain, path.stem, text)
     except daily.DailyRejected as e:
@@ -193,7 +243,7 @@ def _move_from_downloads(brain: Brain, path: Path, now: float) -> None:
     if now - path.stat().st_mtime > DOWNLOADS_MAX_AGE_DAYS * 86400:
         return
     text = _read(path)
-    if text is None or daily.front_matter(text).get("outbrain_kind") != "ai_daily":
+    if text is None or _kind_of(text) == "memo":  # only AI daily logs and deposits are taken from Downloads
         return
     month = datetime.now().strftime("%Y-%m")
     target_dir = brain.settings.ai_daily_inbox / month
@@ -219,6 +269,9 @@ def ingest(brain: Brain) -> list[dict]:
         if s.ai_daily_inbox.exists():
             # Oldest first, so a thread's logs are filed in the order their cursors follow each other.
             paths += sorted((p for p in s.ai_daily_inbox.rglob("*") if _settled(p, now)), key=lambda p: p.name)
+        obsidian = s.inbox / OBSIDIAN_DIR
+        if obsidian.exists():  # notes sent with the Obsidian plugin, in the order they were sent
+            paths += sorted((p for p in obsidian.iterdir() if _settled(p, now)), key=lambda p: p.name)
         for path in paths:
             r = _take_from_inbox(brain, path, now)
             if r:
@@ -258,6 +311,8 @@ def scan_vault(brain: Brain) -> list[dict]:
         if text is None:
             continue
         fm = daily.front_matter(text)
+        if fm.get(PLUGIN_STAMP):
+            continue  # sent with the Obsidian plugin (whole or as differences): never taken twice by the tag scan
         if not _tag_present(text, "remember", fm) or _tag_present(text, "forget", fm):
             continue
         if len(text) > VAULT_NOTE_MAX:

@@ -141,6 +141,36 @@ def since_utc(since: str) -> str:
     return local_midnight.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def cowork_threads(root: Path) -> Iterator[Thread]:
+    """Cowork sessions of the Claude app: <root>/<account>/<org>/local_<id>.json (title) + local_<id>/audit.jsonl."""
+    for meta_path in sorted(root.glob("*/*/local_*.json")):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        audit = meta_path.with_suffix("") / "audit.jsonl"
+        if not audit.exists():
+            continue
+        model, msgs = meta.get("model") or "unknown", []
+        for d in _read_jsonl(audit):
+            t = d.get("type")
+            if t not in ("user", "assistant") or d.get("parent_tool_use_id") or d.get("isMeta"):
+                continue  # sub-agents and tool traffic are not the conversation
+            m = d.get("message") or {}
+            content = m.get("content")
+            if t == "user" and isinstance(content, list) and any(
+                    isinstance(c, dict) and c.get("type") == "tool_result" for c in content):
+                continue
+            if t == "assistant" and m.get("model"):
+                model = m["model"]
+            text = _clean(_texts(content))
+            if text and d.get("timestamp"):
+                msgs.append(Message(d["timestamp"], "owner" if t == "user" else "ai", text))
+        if msgs:
+            yield Thread("cowork", "anthropic", "Claude Cowork", meta.get("sessionId") or meta_path.stem,
+                         meta.get("title") or "Cowork のセッション", model, msgs)
+
+
 def pending(threads: Iterator[Thread], cursors: dict[str, str], since: str) -> Iterator[tuple[Thread, list[Message]]]:
     """Messages newer than each thread's cursor (and than `since`, a local date), when there is enough to log."""
     start = since_utc(since)
@@ -169,8 +199,10 @@ def excerpt(messages: list[Message]) -> tuple[str, bool]:
 BACKFILL_SUFFIX = "#過去分"  # past logs are their own thread in protocol v1, so they never touch the nightly cursor
 
 
-def local_threads(codex_root: Path | None, claude_root: Path | None) -> list[Thread]:
+def local_threads(codex_root: Path | None, claude_root: Path | None, cowork_root: Path | None = None) -> list[Thread]:
     out: list[Thread] = []
+    if cowork_root and cowork_root.is_dir():
+        out += list(cowork_threads(cowork_root))
     if codex_root and codex_root.is_dir():
         out += list(codex_threads(codex_root))
     if claude_root and claude_root.is_dir():

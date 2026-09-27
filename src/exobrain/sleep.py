@@ -301,6 +301,8 @@ def _daily_candidates(brain: Brain, state: SleepState):
         sources.append(transcripts.codex_threads(st.codex_sessions))
     if st.claude_projects and st.claude_projects.is_dir():
         sources.append(transcripts.claude_code_threads(st.claude_projects))
+    if st.cowork_sessions and st.cowork_sessions.is_dir():
+        sources.append(transcripts.cowork_threads(st.cowork_sessions))
     given = 0
     for threads in sources:
         for th, new in transcripts.pending(threads, cursors, st.daily_logs_since):
@@ -341,7 +343,7 @@ def _backfill_candidates(brain: Brain, state: SleepState):
         return
     st = brain.settings
     before = transcripts.since_utc(st.daily_logs_since) if st.daily_logs_since else "9999"
-    threads = {t.key: t for t in transcripts.local_threads(st.codex_sessions, st.claude_projects)}
+    threads = {t.key: t for t in transcripts.local_threads(st.codex_sessions, st.claude_projects, st.cowork_sessions)}
     given, finished = 0, []
     for key in queue:
         th = threads.get(key)

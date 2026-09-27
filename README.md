@@ -23,6 +23,16 @@
 | v0.5 第2区切り | 睡眠A（明示・反復の信号で昇格。引用はプログラムが原文から切り出す。重複は出典を足す）、`/good`、画面の4区分（01 Brain）、大脳皮質の Google ドライブへの書き出し（写し）、Codex・Claude Code の会話から毎晩の日報、大脳皮質の意味による想起、睡眠のトークン記録（`exobrain usage`） | ✅ |
 | v0.5 第3区切り | 睡眠B（連想）、重みの本格運用、忘却、画面の脳らしい動き、意外な結びつき、スマホからの入口 | これから |
 
+## AI とノートからの預け方
+
+| どこから | どうする |
+|---|---|
+| Obsidian | exobrain プラグイン（`integrations/obsidian-plugin/exobrain` を保管庫の `.obsidian/plugins/` に置いて有効化）の脳のボタン。受付で種類を確かめ、受領印を押し、次からは差分だけ送る。`#remember` タグでも取り込む |
+| Claude の Chat | 「/預けて」（スキル `integrations/claude-skill/exobrain-deposit.zip` を Claude の設定から追加）、会話の終わりに「/日報」 |
+| ChatGPT・Gemini | `integrations/chatgpt-gemini.md` の文面をカスタム指示・Gem に貼り、「/預けて」で出るファイルをダウンロード |
+| Codex・Claude Code・Cowork | 何もしなくてよい（毎晩の睡眠で日報にする）。過去の会話は画面の 04 Sleep の「過去のスレッド」から預ける |
+| どの AI でも | 「/思い出して」で記憶を読む。「覚えておいて」「/good」「前にも言ったよね」 |
+
 ## データの置き場所
 
 | もの | 場所 | 変更できるか |

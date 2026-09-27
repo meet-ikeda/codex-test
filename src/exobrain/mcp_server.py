@@ -32,6 +32,8 @@ exobrain は、利用者（オーナー）の外部脳です。どの AI・ど�
 4. オーナーが「/日報」と送ったら submit_daily_log を呼ぶ。前回の /日報 のあと（初回は会話の最初から）に
    この会話で起きたことだけを、会話にあった内容だけで書く。該当がない欄は空にする（「特になし」になる）。
    thread_title はこの会話の短い題名。ai_model は実行環境が示すモデル名。わからなければ unknown（推測しない）。
+4-2. オーナーが「/預けて」「exobrain に預けて」と言ったら deposit を呼ぶ。取材の会話か、クライアントの話か、
+   機密かがはっきりしないときは、預ける前にオーナーに聞く（郵便の受付のように確かめてから送る）。
 5. オーナーが「/good」と送ったときだけ good を呼ぶ。praised には、直前の返答の何が良かったのかを
    やり方として 1 文で書き、used_memory_ids にはその返答で使った記憶の id を入れる。
    「さすが」「いいね」などの言葉だけでは呼ばない（皮肉の場合もあるため）。
@@ -98,6 +100,19 @@ def build_server(brain: Brain) -> MCPServer:
         会話になかったことは書かない。大脳皮質には書かれず、今夜の睡眠で選ばれたものだけが記憶になる。"""
         return guarded(brain.submit_daily_log, session_id, thread_title, events or [], corrections or [],
                        learnings or [], decisions or [], unresolved or [], ai_model)
+
+    @server.tool(annotations=appends)
+    def deposit(session_id: str, thread_title: str, summary: str = "", procedural: list[str] | None = None,
+                semantic: list[str] | None = None, episodes: list[str] | None = None, note_type: str = "",
+                confidential: bool = False) -> dict[str, Any]:
+        """オーナーが「/預けて」「exobrain に預けて」と言ったときに呼ぶ。この会話（前に預けたあとの部分）を要約して預ける。
+        summary: 何の会話か（数行）。procedural: やり方・ルール・好み・注意されたこと。semantic: 事実・決定・
+        オーナーの仕事の状況・考えていること。episodes: 出来事。どれも 1 項目 1 文で、誰の話かを主語で書く。
+        note_type: 取材の会話なら 'interview'、クライアントの話なら 'client'、オーナー自身の話なら ''。
+        confidential: 外に出したくない内容なら true（本棚にだけ置く）。どれか迷ったら、預ける前にオーナーに聞く。
+        返り値の message_to_user をそのままオーナーに伝える。"""
+        return guarded(brain.deposit, session_id, thread_title, summary, procedural or [], semantic or [],
+                       episodes or [], note_type, confidential)
 
     @server.tool(annotations=appends)
     def good(session_id: str, praised: str, owner_words: str = "/good",

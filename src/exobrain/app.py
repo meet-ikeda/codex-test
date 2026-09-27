@@ -317,11 +317,43 @@ class App:
         return {"inbox": pending_inbox(b), "hippocampus": hippo, "cortex": {"kinds": kinds, "memories": memories},
                 "bookshelf": shelf, "flow": flow}
 
+    # ---- past threads (spec v0.6 decision 6) -----------------------------------------
+
+    def threads(self, q: dict[str, str]) -> dict[str, Any]:
+        from . import transcripts
+        from .inbox import current_cursor
+
+        st = self.brain.settings
+        before = transcripts.since_utc(st.daily_logs_since) if st.daily_logs_since else "9999"
+        queue = set(sleep.backfill_queue(self.brain))
+        rows = []
+        for th in transcripts.local_threads(st.codex_sessions, st.claude_projects, st.cowork_sessions):
+            if q.get("q") and q["q"] not in th.title:
+                continue
+            done = current_cursor(self.brain, th.key + transcripts.BACKFILL_SUFFIX) or ""
+            left = sum(1 for m in th.messages if done < m.at < before)
+            rows.append({"key": th.key, "title": th.title, "ai": th.product, "first": th.messages[0].at,
+                         "last": th.messages[-1].at, "past_left": left, "queued": th.key in queue})
+        rows.sort(key=lambda r: r["last"], reverse=True)
+        return {"threads": rows[:200], "nightly_since": st.daily_logs_since}
+
+    def backfill(self, body: dict) -> dict[str, Any]:
+        keys = [k for k in body.get("keys", []) if isinstance(k, str)]
+        queue = sleep.backfill_queue(self.brain)
+        if body.get("cancel"):
+            queue = [k for k in queue if k not in keys]
+        else:
+            queue += [k for k in keys if k not in queue]
+        sleep.save_backfill_queue(self.brain, queue)
+        return {"queue": queue}
+
     # ---- routing -----------------------------------------------------------------------
 
     def get(self, path: str, q: dict[str, str]) -> Any:
         if path == "/api/brain":
             return self.brain_overview()
+        if path == "/api/threads":
+            return self.threads(q)
         if path == "/api/graph":
             return self.graph(q)
         if path.startswith("/api/node/"):
@@ -347,6 +379,8 @@ class App:
             return self.start_sleep(bool(body.get("use_ai", True)))
         if path == "/api/sleep/timer":
             return self.set_timer(body)
+        if path == "/api/backfill":
+            return self.backfill(body)
         if path == "/api/pause":
             b.set_paused(bool(body.get("paused")))
             return {"paused": b.paused}

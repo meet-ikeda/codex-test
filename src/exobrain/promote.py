@@ -25,7 +25,7 @@ from .bookshelf import read_body
 if TYPE_CHECKING:
     from .brain import Brain
 
-EXPLICIT_KINDS = ("remember_note", "memo")
+EXPLICIT_KINDS = ("remember_note", "memo", "deposit")  # the owner handed these over on purpose
 DAILY_EXPLICIT_SECTIONS = ("決まったこと", "注意・訂正されたこと")
 ATOMS_PER_SEGMENT = 5
 ATOMS_PER_OWNER_SEGMENT = 8  # the owner's own notes are dense and were marked on purpose (2026-09-27)
@@ -175,6 +175,8 @@ NOTE_TYPE_HINT = {
               "subject に会社名や担当者を入れる。オーナー自身のことと混ぜない。",
 }
 PERSONAL_INFO_RULE = ("電話番号・住所・メールアドレス・口座などの個人情報や、パスワード・鍵は、原子に書かない。")
+DEPOSIT_HINT = ("これはオーナーが預けると決めた会話を、その会話の AI がまとめたもの。見出しの種類（手続き・意味・"
+                "エピソード）は目安で、中身に合わせて kind を決めてよい。オーナーの仕事の状況や考えも semantic として拾う。")
 OWNER_NOTE_HINT = (
     "これはオーナー自身のメモ（#remember またはメモ）。決定やルールに限らず、"
     "オーナーがいま取り組んでいる仕事・案件、考えていること・関心・問題意識も semantic として拾う"
@@ -188,14 +190,16 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
     owner_note = s["kind"] in EXPLICIT_KINDS
     limit = ATOMS_PER_OWNER_SEGMENT if owner_note else ATOMS_PER_SEGMENT
     meta_row = brain._conn.execute("SELECT meta_json FROM sources WHERE id = ?", (seg.source_id,)).fetchone()[0]
-    note_type = (json.loads(meta_row) if meta_row else {}).get("note_type")
+    meta = json.loads(meta_row) if meta_row else {}
+    note_type, subject = meta.get("note_type"), meta.get("subject")
     return {
         "type": "promote", "source_id": seg.source_id, "signal": seg.signal,
         "source": {"title": s["title"], "writer": s["ai_name"] if s["author"] == "ai" else "オーナー",
                    "date": s["created_at"][:10]},
         "lines": numbered, "similar_memories": similar_memories(brain, text),
         "instructions": (
-            NOTE_TYPE_HINT.get(note_type, "") + (OWNER_NOTE_HINT if owner_note and not note_type else "")
+            NOTE_TYPE_HINT.get(note_type, "") + (f"（この話の相手: {subject}）" if subject else "")
+            + (DEPOSIT_HINT if s["kind"] == "deposit" else OWNER_NOTE_HINT if owner_note and not note_type else "")
             + f"この部分を、長く覚えておく価値のある「記憶の原子」に分ける（最大 {limit} 個。価値がなければ atoms を空に）。"
             "1 原子 = 1 つの決定・事実・ルール・好み・出来事。原子は単独で意味が通る 1 文（300 文字以内）にする。"
             "kind: procedural（やり方・ルール・好み・注意されたこと）/ semantic（事実・決定）/ episode（出来事）。"

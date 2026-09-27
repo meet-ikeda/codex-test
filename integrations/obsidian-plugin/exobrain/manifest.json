@@ -1,0 +1,9 @@
+{
+  "id": "exobrain",
+  "name": "exobrain",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "ノートを exobrain の預かりBOX に送る。受付で取材・クライアント・機密を確かめ、受領印を押し、次からは差分だけ送る。",
+  "author": "meet-ikeda",
+  "isDesktopOnly": true
+}
