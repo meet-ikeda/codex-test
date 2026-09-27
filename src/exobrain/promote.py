@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 EXPLICIT_KINDS = ("remember_note", "memo")
 DAILY_EXPLICIT_SECTIONS = ("決まったこと", "注意・訂正されたこと")
 ATOMS_PER_SEGMENT = 5
+ATOMS_PER_OWNER_SEGMENT = 8  # the owner's own notes are dense and were marked on purpose (2026-09-27)
 SIMILAR_SHOWN = 8
 REPEAT_SIM = 0.80  # bge-m3 cosine for "the same thing said again" — provisional, check on real logs
 IMPORTANCE = {"explicit": 1.0, "demand": 0.8, "repetition": 0.6, "association": 0.4}  # OUTBRAIN v0.4 §7.2 "I"
@@ -164,17 +165,26 @@ def similar_memories(brain: Brain, text: str, limit: int = SIMILAR_SHOWN) -> lis
     return out
 
 
+OWNER_NOTE_HINT = (
+    "これはオーナー自身のメモ（#remember またはメモ）。決定やルールに限らず、"
+    "オーナーがいま取り組んでいる仕事・案件、考えていること・関心・問題意識も semantic として拾う"
+    "（例: 「オーナーは〇〇社の採用サイトの構成を考えている」）。走り書きでも、読み取れることは拾う。")
+
+
 def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
     s = brain._conn.execute("SELECT title, kind, author, ai_name, created_at FROM sources WHERE id = ?",
                             (seg.source_id,)).fetchone()
     numbered = [[seg.line_start + i, line] for i, line in enumerate(text.splitlines())]
+    owner_note = s["kind"] in EXPLICIT_KINDS
+    limit = ATOMS_PER_OWNER_SEGMENT if owner_note else ATOMS_PER_SEGMENT
     return {
         "type": "promote", "source_id": seg.source_id, "signal": seg.signal,
         "source": {"title": s["title"], "writer": s["ai_name"] if s["author"] == "ai" else "オーナー",
                    "date": s["created_at"][:10]},
         "lines": numbered, "similar_memories": similar_memories(brain, text),
         "instructions": (
-            "この部分を、長く覚えておく価値のある「記憶の原子」に分ける（最大 5 個。価値がなければ atoms を空に）。"
+            (OWNER_NOTE_HINT if owner_note else "")
+            + f"この部分を、長く覚えておく価値のある「記憶の原子」に分ける（最大 {limit} 個。価値がなければ atoms を空に）。"
             "1 原子 = 1 つの決定・事実・ルール・好み・出来事。原子は単独で意味が通る 1 文（300 文字以内）にする。"
             "kind: procedural（やり方・ルール・好み・注意されたこと）/ semantic（事実・決定）/ episode（出来事）。"
             "derivation: verbatim（原文のまま）/ paraphrase（意味を変えずに整理）/ inferred（原文に直接はない推論）。"
@@ -183,6 +193,7 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
             "similar_memories と同じ内容なら same_as にその id を入れる（新しく作らない）。"
             "similar_memories の内容を新しい決定が置き換えるなら supersedes にその id を入れる。"
             "迷ったら統合しない。書かれていないことを足さない。"),
+        "max_atoms": limit,
     }
 
 
@@ -200,8 +211,9 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
     from .brain import CONCEPTS_MAX, ELEMENT_KINDS, TEXT_MAX, InvalidInput
 
     atoms = res.get("atoms") or []
-    if len(atoms) > ATOMS_PER_SEGMENT:
-        raise InvalidInput(f"promote の atoms は {ATOMS_PER_SEGMENT} 個までです。")
+    limit = item.get("max_atoms", ATOMS_PER_SEGMENT)
+    if len(atoms) > limit:
+        raise InvalidInput(f"この promote の atoms は {limit} 個までです。")
     lo, hi = item["lines"][0][0], item["lines"][-1][0]
     known = {m["id"] for m in item["similar_memories"]}
     body_lines = {n: t for n, t in item["lines"]}

@@ -125,6 +125,29 @@ def test_verbatim_that_is_not_in_the_original_becomes_paraphrase(brain, session)
     assert got == {"1回3資料・8チャンクを上限とする": "verbatim", "1回あたも3資料を上限とする": "paraphrase"}
 
 
+def test_owner_notes_may_yield_eight_atoms_others_five(brain, session):
+    brain.add_memo("仕事メモ", "\n".join(f"- 案件{i}の構成を考えている" for i in range(9)) + "\n")
+    brain.submit_daily_log(session, "相談", [], [], [], [f"決定{i}" for i in range(9)], [])
+    run_id, _ = sleep.start(brain)
+    state = sleep.SleepState(run_id)
+    batch = sleep.next_batch(brain, state)
+    by_kind = {}
+    for it in batch["items"]:
+        if it["type"] == "promote":
+            kind = brain._conn.execute("SELECT kind FROM sources WHERE id = ?", (it["source_id"],)).fetchone()[0]
+            by_kind[kind] = it
+    memo, log = by_kind["memo"], by_kind["ai_daily"]
+    assert memo["max_atoms"] == 8 and "取り組んでいる仕事" in memo["instructions"]
+    assert log["max_atoms"] == 5 and "取り組んでいる仕事" not in log["instructions"]
+    atom = lambda n: {"kind": "semantic", "text": f"原子{n}", "derivation": "inferred",  # noqa: E731
+                      "lines": [memo["lines"][0][0]] * 2}
+    with pytest.raises(InvalidInput, match="5 個まで"):  # refused before anything is written
+        la = [dict(atom(n), lines=[log["lines"][0][0]] * 2) for n in range(6)]
+        sleep.apply(brain, state, batch["batch_id"], [{"item_id": log["item_id"], "atoms": la}])
+    sleep.apply(brain, state, batch["batch_id"], [{"item_id": memo["item_id"], "atoms": [atom(n) for n in range(8)]}])
+    assert brain._conn.execute("SELECT COUNT(*) FROM nodes WHERE body LIKE '原子%'").fetchone()[0] == 8
+
+
 def test_bad_line_numbers_and_unknown_ids_are_refused(brain, session):
     brain.add_memo("メモ", "一行目\n二行目\n")
     run_id, _ = sleep.start(brain)
