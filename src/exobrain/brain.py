@@ -45,7 +45,8 @@ NODE_SEED_MIN = 0.5  # bge-m3 cosine: a cortex memory this close to the cue star
 NODE_FOUND_MIN = 0.62  # ...and this close counts as the cortex having answered (no need to look further)
 NODE_SEEDS_MAX = 20
 REVISION_LINK = 0.8  # a memory and the episode of rewriting it stay closely tied
-AUTO_LOGGED_AIS = ("codex", "claude code", "cowork")  # their conversations are read from this Mac every night
+AUTO_LOGGED_AIS = ("codex", "claude code")  # their conversations are read from this Mac every night (Cowork may run
+# in the cloud, where nothing is left on this Mac, so its /日報 is accepted)
 FALLBACK_KEEP = 0.6  # share of the recall budget the cortex keeps when records are looked up too
 
 ELEMENT_KINDS = ("episode", "semantic", "procedural")
@@ -554,9 +555,14 @@ class Brain:
         from .inbox import ingest
 
         ingest(self)  # what arrived in the receiving box is taken in before the conversation starts
+        # exo_session is the name the tools take (a relay dropped "session_id"); both are returned.
         if not include_profile:  # the owner compares answers with and without memory: read only on "/思い出して"
-            return {"session_id": sid}
-        return {"session_id": sid, "profile": self.profile(PROFILE_BUDGET)}
+            return {"exo_session": sid, "session_id": sid}
+        return {"exo_session": sid, "session_id": sid, "profile": self.profile(PROFILE_BUDGET)}
+
+    def latest_session(self) -> str | None:
+        row = self._conn.execute("SELECT id FROM sessions ORDER BY started_at DESC LIMIT 1").fetchone()
+        return row[0] if row else None
 
     def remember_explicit(self, session_id: str, words: str, kind: str = "procedural",
                           concepts: list[str] | None = None, context: str = "") -> dict[str, Any]:

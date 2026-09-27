@@ -69,3 +69,12 @@ def test_bad_input_reaches_the_ai_as_a_message(server):
     sid = call(server, "start_session", {"ai_name": "Codex"})["session_id"]
     with pytest.raises(ToolError, match="分けてください"):
         asyncio.run(server.call_tool("remember_explicit", {"session_id": sid, "words": "長" * 400}))
+
+
+def test_the_conversation_id_survives_a_relay_that_drops_session_id(server, brain):
+    started = call(server, "start_session", {"ai_name": "Claude (Cowork)", "include_profile": True})
+    assert started["exo_session"] == started["session_id"]
+    nid = call(server, "remember_explicit", {"exo_session": started["exo_session"], "words": "見出しは短く"})["node_id"]
+    # A relay removed session_id and nothing else: the latest conversation is used.
+    got = call(server, "recall", {"cue": "見出し"})
+    assert nid in got["memory_ids"]
