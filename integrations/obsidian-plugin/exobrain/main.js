@@ -3,9 +3,13 @@
    stamp a receipt on the note, and next time send only what was added since the stamp. */
 "use strict";
 
-const { Plugin, Modal, Notice, Setting, PluginSettingTab, FileSystemAdapter } = require("obsidian");
+const { Plugin, Modal, Notice, Setting, PluginSettingTab, FileSystemAdapter, addIcon } = require("obsidian");
 const fs = require("fs");
 const path = require("path");
+
+// 〠 — the postal mark with a face: a counter clerk. One thin stroke in the text colour (white in dark mode).
+const POST_ICON = `<g fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="50" cy="50" r="44"/><path d="M28 30h44M28 42h44M50 42v22"/><path d="M33 64q17 14 34 0"/></g>`;
 
 const STAMP = "exobrain受領";
 const TYPE_KEY = "exobrain種類"; // remembered on the note so the counter is pre-filled next time
@@ -120,7 +124,8 @@ module.exports = class Exobrain extends Plugin {
     if (!(this.app.vault.adapter instanceof FileSystemAdapter)) { new Notice("exobrain はデスクトップ専用です"); return; }
     const vaultPath = this.app.vault.adapter.getBasePath();
     this.data = Object.assign({ inbox: defaultInbox(vaultPath), sent: {} }, await this.loadData());
-    this.addRibbonIcon("brain", "exobrain に預ける", () => this.open());
+    addIcon("exobrain-post", POST_ICON);
+    this.addRibbonIcon("exobrain-post", "exobrain に預ける（受付）", () => this.open());
     this.addCommand({ id: "send-note", name: "このノートを exobrain に預ける", callback: () => this.open() });
     this.addSettingTab(new ExobrainSettings(this.app, this));
   }

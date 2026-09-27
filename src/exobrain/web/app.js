@@ -619,7 +619,7 @@ async function loadThreads() {
       const btn = el("button", { class: "link cap", on: { click: async () => {
         await guarded(async () => {
           await api("/api/backfill", { keys: [th.key], cancel: th.queued });
-          toast(th.queued ? "取り込み待ちから外しました。" : `「${th.title}」を預かりました。次の睡眠から日報にします。`);
+          toast(th.queued ? "取り込み待ちから外しました。" : `「${th.title}」を預かりました。次の睡眠でまとめて預け入れにします。`);
           loadThreads();
         });
       } } }, th.queued ? "取り込み待ち — 外す" : th.past_left ? "預ける" : "");

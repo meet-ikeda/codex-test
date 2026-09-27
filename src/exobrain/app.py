@@ -32,7 +32,7 @@ DEFAULT_PORT = 8765
 MAX_GRAPH_NODES = 5000
 MAX_GRAPH_EDGES = 20000
 INBOX_POLL_SECONDS = 60
-VAULT_SCAN_EVERY = 5  # rounds: the vault is looked through every 5 minutes
+VAULT_SCAN_HOURS = 12  # the #remember scan; sleep also runs one every night
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2"}
 
@@ -400,18 +400,25 @@ class App:
     def poll_inbox(self) -> None:
         """Take in what arrives, look through the vault now and then, and embed new chunks."""
         from .hippocampus import encode_pending
-        from .inbox import scan_vault
 
-        rounds = 0
         while not self._stop.wait(INBOX_POLL_SECONDS):
-            for step in (lambda: ingest(self.brain),
-                         lambda: scan_vault(self.brain) if rounds % VAULT_SCAN_EVERY == 0 else None,
-                         lambda: encode_pending(self.brain)):
+            for step in (lambda: ingest(self.brain), self._scan_vault_if_due, lambda: encode_pending(self.brain)):
                 try:
                     step()
                 except Exception as e:  # keep the app alive; report in the terminal
                     print(f"inbox: {e}")
-            rounds += 1
+
+    def _scan_vault_if_due(self) -> None:
+        """#remember is looked for twice a day at most (the Obsidian plugin sends notes at once)."""
+        import time
+
+        from .inbox import scan_vault
+
+        mark = self.brain.settings.home / "vault_scanned_at"
+        last = float(mark.read_text()) if mark.exists() else 0.0
+        if time.time() - last >= VAULT_SCAN_HOURS * 3600:
+            scan_vault(self.brain)
+            mark.write_text(str(time.time()))
 
 
 def make_handler(app: App, port: int):

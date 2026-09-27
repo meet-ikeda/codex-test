@@ -194,6 +194,7 @@ def build_sleep_server(brain: Brain, run_id: str) -> MCPServer:
     def sleep_apply(batch_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
         """束の結果を書き込む。results は item ごとに {item_id, ...}。
         write_daily: {item_id, events, corrections, learnings, decisions, unresolved, skip}。
+        write_deposit: {item_id, summary, procedural, semantic, episodes, note_type, skip}。
         promote: {item_id, atoms: [{kind, text, derivation, lines, confidence, concepts, same_as?, supersedes?}]}。
         reconcile: {item_id, action: keep_both|supersede|merge, keep_id?, lesson?}。
         verify_links: {item_id, keep: [[src, dst]], drop: [[src, dst]]}。

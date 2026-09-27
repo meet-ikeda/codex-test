@@ -333,7 +333,10 @@ def test_backfill_takes_only_the_past_and_never_twice(tmp_path, monkeypatch):
             while not (batch := sleep.next_batch(b, state))["done"]:
                 res = []
                 for i in batch["items"]:
-                    if i["type"] == "write_daily":
+                    if i["type"] == "write_deposit":
+                        written.append(("過去分", i["conversation"]))
+                        res.append({"item_id": i["item_id"], "summary": "古い相談", "semantic": ["オーナーは相談していた"]})
+                    elif i["type"] == "write_daily":
                         written.append((i["thread"]["title"], i["conversation"]))
                         res.append({"item_id": i["item_id"], "events": ["相談した"]})
                     else:
@@ -348,8 +351,10 @@ def test_backfill_takes_only_the_past_and_never_twice(tmp_path, monkeypatch):
         sleep.save_backfill_queue(b, ["codex:OLD"])  # asked again later: nothing is taken twice
         assert [w for w in night() if "過去分" in w[0]] == []
         assert sleep.backfill_queue(b) == []  # finished threads leave the queue
-        titles = [r[0] for r in b._conn.execute("SELECT title FROM sources WHERE kind = 'ai_daily' ORDER BY title")]
-        assert sum("過去分" not in t for t in titles) == 1 and sum("過去分" in t for t in titles) >= 2
+        kinds = [r[0] for r in b._conn.execute("SELECT kind FROM sources")]
+        assert kinds.count("ai_daily") == 1 and kinds.count("deposit") >= 2  # the past comes in as deposits
+        assert b._conn.execute("SELECT COUNT(*) FROM hippocampus h JOIN sources s ON s.id = h.source_id"
+                               " WHERE s.kind = 'deposit'").fetchone()[0] >= 2
 
 
 def test_daily_log_command_is_refused_where_logs_are_automatic(tmp_path):

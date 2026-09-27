@@ -148,7 +148,7 @@ def _threads(brain, a) -> int:
     sleep.save_backfill_queue(brain, queue + [k for k in keys if k not in queue])
     for t in chosen:
         print(f"取り込み待ちに入れました: {t.title}（{t.product}）")
-    print("次の睡眠から、毎晩の日報より前の発言を、ひと区切りずつ日報にします（1晩に最大"
+    print("次の睡眠から、毎晩の日報より前の発言を、ひと区切りずつ預け入れ（要約と3種類の記憶）にします（1晩に最大"
           f" {sleep.MAX_BACKFILL_ITEMS} 区切り）。同じスレッドを何度入れても重なりません。")
     return 0
 
@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("threads", help="この Mac に残っている Codex・Claude Code のスレッドを一覧にする")
     s.add_argument("--search", help="題名に含まれる語で絞る")
     s.add_argument("--limit", type=int, default=30)
-    s = sub.add_parser("backfill", help="選んだスレッドの過去分（毎晩の日報より前）を、次の睡眠から日報にする")
+    s = sub.add_parser("backfill", help="選んだスレッドの過去分（毎晩の日報より前）を、次の睡眠から預け入れにする")
     s.add_argument("thread_ids", nargs="*", help="exobrain threads の id（先頭の数文字でよい）")
     s.add_argument("--cancel", action="store_true", help="取り込み待ちから外す")
 
