@@ -232,6 +232,7 @@ async function loadGraph() {
       .slice(0, Math.min(12, Math.ceil(data.nodes.length / 5))).map((n) => n.id);
     G.selected = null;
     $("#detail").hidden = true;
+    $("#tab-graph").classList.remove("detail-open");
     applySearch();
   });
 }
@@ -318,6 +319,7 @@ function applySearch() {
   if (q && G.data) {
     G.selected = null;
     $("#detail").hidden = true;
+    $("#tab-graph").classList.remove("detail-open");
     G.matches = new Set(G.data.nodes.filter((n) => (n.label || "").toLowerCase().includes(q)).map((n) => n.id));
   }
   applyEmphasis();
@@ -338,6 +340,7 @@ function focusNode(id) {
 function clearSelection() {
   G.selected = null;
   $("#detail").hidden = true;
+  $("#tab-graph").classList.remove("detail-open");
   applyEmphasis();
 }
 
@@ -396,6 +399,7 @@ function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes
   const d = $("#detail");
   d.replaceChildren(...parts);
   d.hidden = false;
+  $("#tab-graph").classList.add("detail-open"); // the search and filters step aside
   d.scrollTop = 0;
 }
 

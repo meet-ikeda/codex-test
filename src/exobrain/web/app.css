@@ -289,3 +289,10 @@ body.intro-on { overflow: hidden; }
 .revision { padding: 10px 0; border-bottom: 1px solid var(--rule); font-size: 12.5px; }
 .revision p { margin: 4px 0; }
 .revision .old { color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+
+/* ---------- cortex: the memory detail and the controls never overlap ---------- */
+.g-controls { transition: right .35s cubic-bezier(.2, .7, .2, 1); }
+.tab-graph.detail-open .g-controls { right: 416px; } /* 380px detail + a 36px margin */
+@media (max-width: 900px) {
+  .tab-graph.detail-open .g-controls { display: none; }
+}
