@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-EXCERPT_MAX = 24_000  # characters of conversation handed to the AI for one thread's log
-HEAD_KEEP = 6_000
+EXCERPT_MAX = 24_000  # characters per part handed to the AI for one thread's log
+CONTEXT_MESSAGES = 8  # preceding messages supplied as context, never as material for the new log
 MIN_NEW_CHARS = 200  # a thread with less than this since the last log is not worth a log
 SKIP_PREFIXES = ("<", "# AGENTS.md", "## Referenced", "Caveat:")
 SLEEP_PROJECT_MARK = "-exobrain"  # Claude Code runs started by exobrain's sleep (cwd ~/.exobrain)
@@ -182,18 +182,45 @@ def pending(threads: Iterator[Thread], cursors: dict[str, str], since: str) -> I
         yield th, new
 
 
-def excerpt(messages: list[Message]) -> tuple[str, bool]:
-    """The conversation as plain lines, trimmed in the middle if too long. Returns (text, truncated)."""
+def _render(messages: list[Message]) -> str:
     lines = []
     for m in messages:
         at = datetime.fromisoformat(m.at.replace("Z", "+00:00")).astimezone()
         who = "オーナー" if m.role == "owner" else "AI"
         lines.append(f"[{at:%m/%d %H:%M} {who}] {m.text}")
-    text = "\n\n".join(lines)
-    if len(text) <= EXCERPT_MAX:
-        return text, False
-    tail = EXCERPT_MAX - HEAD_KEEP
-    return text[:HEAD_KEEP] + "\n\n（……途中を省略……）\n\n" + text[-tail:], True
+    return "\n\n".join(lines)
+
+
+def split_messages(messages: list[Message], max_chars: int = EXCERPT_MAX) -> list[list[Message]]:
+    """Messages in chronological groups, each rendering to about max_chars at most (a longer message stands alone)."""
+    groups: list[list[Message]] = []
+    current: list[Message] = []
+    for message in messages:
+        if current and len(_render([*current, message])) > max_chars:
+            groups.append(current)
+            current = [message]
+        else:
+            current.append(message)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def excerpt_parts(messages: list[Message], max_chars: int = EXCERPT_MAX) -> list[str]:
+    """Render every message in chronological parts without dropping the middle of a conversation."""
+    return [_render(g) for g in split_messages(messages, max_chars)]
+
+
+def excerpt(messages: list[Message]) -> tuple[str, bool]:
+    """Backward-compatible rendering. Long conversations are split, never cut in the middle."""
+    parts = excerpt_parts(messages)
+    return "\n\n（次の区間）\n\n".join(parts), len(parts) > 1
+
+
+def context_before(messages: list[Message], first_new_at: str, limit: int = CONTEXT_MESSAGES) -> str:
+    """The tail before a cursor, used only to resolve pronouns and continuing topics."""
+    before = [message for message in messages if message.at < first_new_at]
+    return _render(before[-limit:])
 
 
 BACKFILL_SUFFIX = "#過去分"  # past logs are their own thread in protocol v1, so they never touch the nightly cursor

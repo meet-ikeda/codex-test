@@ -36,9 +36,12 @@ def answer(item):
     t = item["type"]
     if t == "promote":
         n, first = next((n, l) for n, l in item["lines"] if l.strip())
+        evidence = item.get("evidence")
+        evidence_lines = [evidence["lines"][0][0]] * 2 if evidence else None
         return {"item_id": item["item_id"], "atoms": [
             {"kind": "procedural", "text": first.lstrip("# ").strip(), "derivation": "verbatim", "lines": [n, n],
-             "concepts": ["睡眠テスト"], "confidence": 0.9}]}
+             "concepts": ["睡眠テスト"], "confidence": 0.9,
+             **({"evidence_lines": evidence_lines} if evidence_lines else {})}]}
     if t == "write_daily":
         return {"item_id": item["item_id"], "events": ["テストの会話をした"], "decisions": ["テストで決めた"]}
     if t == "reconcile":

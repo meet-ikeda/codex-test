@@ -13,6 +13,7 @@ from datetime import datetime
 SECTIONS = (
     ("summary", "要約"),
     ("procedural", "手続き記憶（やり方・ルール・好み・注意されたこと）"),
+    ("reasons", "こだわり・理由（オーナー本人の言葉）"),
     ("semantic", "意味記憶（事実・決定・仕事の状況・考えていること）"),
     ("episode", "エピソード記憶（出来事）"),
 )

@@ -22,6 +22,7 @@ SECTIONS = (
     ("corrections", "注意・訂正されたこと"),
     ("learnings", "工夫・学び"),
     ("decisions", "決まったこと"),
+    ("reasons", "オーナーのこだわり・理由"),  # the why, in the owner's words (2026-09-29)
     ("unresolved", "未解決・次に続くこと"),
 )
 _FRONT = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)

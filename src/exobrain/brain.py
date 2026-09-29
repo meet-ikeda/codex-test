@@ -705,7 +705,8 @@ class Brain:
                                    "書き換えた経緯も出来事として覚えました。前の内容は履歴に残っています。"}
 
     def deposit(self, session_id: str, thread_title: str, summary: str, procedural: list[str], semantic: list[str],
-                episodes: list[str], note_type: str = "", confidential: bool = False) -> dict[str, Any]:
+                episodes: list[str], note_type: str = "", confidential: bool = False,
+                reasons: list[str] | None = None) -> dict[str, Any]:
         """`/預けて`: the owner hands this thread over. The AI summarises it into the three kinds of memory;
         it goes to the receiving box and the hippocampus, and every part is a promotion candidate."""
         from . import deposit as dep
@@ -715,11 +716,12 @@ class Brain:
         self._require_writable()
         if note_type not in dep.NOTE_TYPES:
             raise InvalidInput("note_type は ''（オーナー自身の話）・'interview'（取材）・'client'（クライアント）のどれかです。")
-        if not (summary.strip() or procedural or semantic or episodes):
+        if not (summary.strip() or procedural or semantic or episodes or reasons):
             raise InvalidInput("預ける中身が空です。")
         source, _ = _ai_source(ai_name)
         text = dep.render(source, thread_title.strip() or "無題のスレッド",
-                          {"summary": summary, "procedural": procedural, "semantic": semantic, "episode": episodes},
+                          {"summary": summary, "procedural": procedural, "reasons": reasons or [], "semantic": semantic,
+                           "episode": episodes},
                           note_type, confidential)
         r = file_deposit(self, text, actor=f"ai:{ai_name}")
         if r is None:
@@ -730,7 +732,8 @@ class Brain:
 
     def submit_daily_log(self, session_id: str, thread_title: str, events_: list[str], corrections: list[str],
                          learnings: list[str], decisions: list[str], unresolved: list[str],
-                         ai_model: str = "unknown", thread_id: str | None = None) -> dict[str, Any]:
+                         ai_model: str = "unknown", thread_id: str | None = None,
+                         reasons: list[str] | None = None) -> dict[str, Any]:
         """`/日報`: the AI writes what is new in this conversation since its last log (protocol v1).
         The log goes to the receiving box and the hippocampus; nothing is written to the cortex."""
         import hashlib
@@ -755,7 +758,7 @@ class Brain:
         last = self._conn.execute("SELECT at FROM ai_checkpoints WHERE key = ?", (key,)).fetchone()
         period_start = datetime.fromisoformat(last[0] if last else started).astimezone()
         sections = {"events": events_, "corrections": corrections, "learnings": learnings,
-                    "decisions": decisions, "unresolved": unresolved}
+                    "decisions": decisions, "reasons": reasons or [], "unresolved": unresolved}
         digest = hashlib.sha256(events.canonical_json([key, prev, sections]).encode()).hexdigest()
         fields.update(entry_date=f"{now:%Y-%m-%d}", period_start=period_start.isoformat(timespec="seconds"),
                       period_end=now.isoformat(timespec="seconds"), generated_at=now.isoformat(timespec="seconds"),

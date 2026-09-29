@@ -3,7 +3,7 @@
 The AI does not decide what is important. A passage is a candidate only when a
 signal says so:
 - explicit:   the owner's own notes (#remember, memos) and, in AI daily logs, the
-              sections "決まったこと" and "注意・訂正されたこと"
+              sections "決まったこと", "注意・訂正されたこと" and "オーナーのこだわり・理由"
 - repetition: something close to it appears in another original from another day
 Anything else stays on the bookshelf.
 
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from .brain import Brain
 
 EXPLICIT_KINDS = ("remember_note", "memo", "deposit")  # the owner handed these over on purpose
-DAILY_EXPLICIT_SECTIONS = ("決まったこと", "注意・訂正されたこと")
+DAILY_EXPLICIT_SECTIONS = ("決まったこと", "注意・訂正されたこと", "オーナーのこだわり・理由")
 ATOMS_PER_SEGMENT = 5
 ATOMS_PER_OWNER_SEGMENT = 8  # the owner's own notes are dense and were marked on purpose (2026-09-27)
 SIMILAR_SHOWN = 8
@@ -174,6 +174,9 @@ NOTE_TYPE_HINT = {
     "client": "これはクライアントについてのメモ。クライアントの事情・方針・要望は about='client'、"
               "subject に会社名や担当者を入れる。オーナー自身のことと混ぜない。",
 }
+REASON_RULE = ("ルールや決定に、オーナーが言った理由・こだわりが原文にあれば、原子の文に「（理由: …）」として含め、"
+               "その行も lines に含める。オーナーの人柄・性格・美学を推測した原子は作らない"
+               "（「オーナーは〜を嫌う人だ」ではなく、オーナーが言ったことと、何についての話かを書く）。")
 PERSONAL_INFO_RULE = ("電話番号・住所・メールアドレス・口座などの個人情報や、パスワード・鍵は、原子に書かない。")
 DEPOSIT_HINT = ("これはオーナーが預けると決めた会話を、その会話の AI がまとめたもの。見出しの種類（手続き・意味・"
                 "エピソード）は目安で、中身に合わせて kind を決めてよい。オーナーの仕事の状況や考えも semantic として拾う。")
@@ -192,6 +195,39 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
     meta_row = brain._conn.execute("SELECT meta_json FROM sources WHERE id = ?", (seg.source_id,)).fetchone()[0]
     meta = json.loads(meta_row) if meta_row else {}
     note_type, subject = meta.get("note_type"), meta.get("subject")
+    evidence = None
+    evidence_source_id = meta.get("conversation_source_id") if s["kind"] == "ai_daily" else None
+    if evidence_source_id:
+        evidence_row = brain._conn.execute(
+            "SELECT path FROM sources WHERE id = ? AND erased = 0", (evidence_source_id,)).fetchone()
+        if evidence_row:
+            evidence_body = read_body(brain.settings.drive_root / evidence_row[0])
+            all_lines = evidence_body.splitlines()
+            if len(evidence_body) <= 24_000:
+                evidence = {
+                    "source_id": evidence_source_id,
+                    "lines": [[i, line] for i, line in enumerate(all_lines, 1)],
+                }
+                all_lines = []
+            from .recall import bigrams
+
+            query = bigrams(text)
+            scored = sorted(
+                ((len(query & bigrams(line)), i) for i, line in enumerate(all_lines, 1) if line.strip()),
+                reverse=True,
+            )
+            chosen: set[int] = set()
+            for score, line_no in scored[:20]:
+                if score <= 0:
+                    break
+                chosen.update(range(max(1, line_no - 2), min(len(all_lines), line_no + 2) + 1))
+            if not chosen and all_lines:  # heavily paraphrased long logs: keep a bounded start for grounding
+                chosen.update(range(1, min(len(all_lines), 80) + 1))
+            if all_lines:
+                evidence = {
+                    "source_id": evidence_source_id,
+                    "lines": [[i, all_lines[i - 1]] for i in sorted(chosen)[:120]],
+                }
     return {
         "type": "promote", "source_id": seg.source_id, "signal": seg.signal,
         "source": {"title": s["title"], "writer": s["ai_name"] if s["author"] == "ai" else "オーナー",
@@ -203,15 +239,20 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
             + f"この部分を、長く覚えておく価値のある「記憶の原子」に分ける（最大 {limit} 個。価値がなければ atoms を空に）。"
             "1 原子 = 1 つの決定・事実・ルール・好み・出来事。原子は単独で意味が通る 1 文（300 文字以内）にする。"
             "kind: procedural（やり方・ルール・好み・注意されたこと）/ semantic（事実・決定）/ episode（出来事）。"
+            + REASON_RULE +
             "derivation: verbatim（原文のまま）/ paraphrase（意味を変えずに整理）/ inferred（原文に直接はない推論）。"
-            "lines: 根拠の行番号 [開始, 終了]（lines にある番号だけ）。引用は書かない（プログラムが切り出す）。"
-            "confidence: 0〜1。concepts: 固有名詞・話題を 8 個まで。"
+            "lines: 日報内の根拠行 [開始, 終了]（lines にある番号だけ）。引用は書かない（プログラムが切り出す）。"
+            + ("evidence は日報の元になった会話抜粋。各原子について、内容を裏づける連続した原会話の"
+               "evidence_lines: [開始, 終了] を必ず返す。裏づけが見つからない原子は作らない。"
+               if evidence else "")
+            + "confidence: 0〜1。concepts: 固有名詞・話題を 8 個まで。"
             "similar_memories と同じ内容なら same_as にその id を入れる（新しく作らない）。"
             "similar_memories の内容を新しい決定が置き換えるなら supersedes にその id を入れる。"
             "about: その記憶が誰についてか（owner=オーナー / client=クライアント / interviewee=取材相手 / other）。"
             "owner 以外なら subject に誰か（会社名・人名・役割）を入れ、text の主語にもする。"
             + PERSONAL_INFO_RULE + "迷ったら統合しない。書かれていないことを足さない。"),
         "max_atoms": limit, **({"note_type": note_type} if note_type else {}),
+        **({"evidence": evidence} if evidence else {}),
     }
 
 
@@ -235,6 +276,8 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
     lo, hi = item["lines"][0][0], item["lines"][-1][0]
     known = {m["id"] for m in item["similar_memories"]}
     body_lines = {n: t for n, t in item["lines"]}
+    evidence = item.get("evidence")
+    evidence_lines = {n: t for n, t in (evidence or {}).get("lines", [])}
     out = []
     for i, a in enumerate(atoms):
         kind, text = a.get("kind"), " ".join(str(a.get("text") or "").split())
@@ -251,6 +294,18 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
         quote = "\n".join(body_lines[n] for n in range(ln[0], ln[1] + 1)).strip()
         if not quote:
             raise InvalidInput(f"atoms[{i}].lines の範囲が空行だけです。")
+        evidence_range, evidence_quote = None, None
+        if evidence:
+            evidence_range = a.get("evidence_lines")
+            if not (isinstance(evidence_range, list) and len(evidence_range) == 2
+                    and all(isinstance(x, int) for x in evidence_range)
+                    and evidence_range[0] <= evidence_range[1]
+                    and all(n in evidence_lines for n in range(evidence_range[0], evidence_range[1] + 1))):
+                raise InvalidInput(f"atoms[{i}].evidence_lines は evidence にある連続行の [開始, 終了] にしてください。")
+            evidence_quote = "\n".join(
+                evidence_lines[n] for n in range(evidence_range[0], evidence_range[1] + 1)).strip()
+            if not evidence_quote:
+                raise InvalidInput(f"atoms[{i}].evidence_lines の範囲が空行だけです。")
         try:
             conf = float(a.get("confidence", 0.7))
         except (TypeError, ValueError):
@@ -274,7 +329,8 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
             raise InvalidInput(f"atoms[{i}] は {about} の話なので、subject に誰か（名前か役割）を入れてください。")
         out.append({"kind": kind, "text": text, "derivation": der, "lines": ln, "quote": quote,
                     "confidence": round(conf, 3), "concepts": concepts, "about": about, "subject": subject,
-                    "same_as": a.get("same_as"), "supersedes": a.get("supersedes")})
+                    "same_as": a.get("same_as"), "supersedes": a.get("supersedes"),
+                    "evidence_lines": evidence_range, "evidence_quote": evidence_quote})
     return out
 
 
@@ -284,6 +340,7 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
 
     counts = {"new": 0, "reinforced": 0, "superseded": 0}
     src = item["source_id"]
+    evidence_source = (item.get("evidence") or {}).get("source_id")
     origin = brain._conn.execute("SELECT origin_file FROM sources WHERE id = ?", (src,)).fetchone()[0]
     for a in atoms:
         if a["same_as"]:
@@ -294,6 +351,11 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
             brain._emit(actor, "node_sourced", {
                 "node_id": a["same_as"], "source_id": src, "line_start": a["lines"][0], "line_end": a["lines"][1],
                 "quote": a["quote"], "occurrence": origin is None or origin not in prev_origins})
+            if evidence_source and a["evidence_quote"]:
+                brain._emit(actor, "node_sourced", {
+                    "node_id": a["same_as"], "source_id": evidence_source,
+                    "line_start": a["evidence_lines"][0], "line_end": a["evidence_lines"][1],
+                    "quote": a["evidence_quote"], "occurrence": False})
             counts["reinforced"] += 1
             continue
         created = brain._add_elements(
@@ -303,6 +365,11 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
         nid = created[0]["id"]
         brain._emit(actor, "node_sourced", {"node_id": nid, "source_id": src, "line_start": a["lines"][0],
                                             "line_end": a["lines"][1], "quote": a["quote"]})
+        if evidence_source and a["evidence_quote"]:
+            brain._emit(actor, "node_sourced", {
+                "node_id": nid, "source_id": evidence_source,
+                "line_start": a["evidence_lines"][0], "line_end": a["evidence_lines"][1],
+                "quote": a["evidence_quote"]})
         counts["new"] += 1
         if a["supersedes"]:
             brain._emit(actor, "node_updated", {"id": a["supersedes"], "status": "superseded"})

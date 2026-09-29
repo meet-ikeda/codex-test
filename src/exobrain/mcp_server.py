@@ -103,27 +103,29 @@ def build_server(brain: Brain) -> MCPServer:
     @server.tool(annotations=appends)
     def submit_daily_log(thread_title: str, events: list[str] | None = None,
                          corrections: list[str] | None = None, learnings: list[str] | None = None,
-                         decisions: list[str] | None = None, unresolved: list[str] | None = None,
-                         ai_model: str = "unknown", exo_session: str = "", session_id: str = "") -> dict[str, Any]:
+                         decisions: list[str] | None = None, reasons: list[str] | None = None,
+                         unresolved: list[str] | None = None, ai_model: str = "unknown", exo_session: str = "", session_id: str = "") -> dict[str, Any]:
         """オーナーが「/日報」と送ったときに呼ぶ。前回の /日報 のあとに、この会話で起きたことだけを書く。
         events: 今日の出来事 / corrections: オーナーから注意・訂正されたこと / learnings: 工夫・学び /
-        decisions: 決まったこと / unresolved: 未解決・次に続くこと。どれも 1 項目 1 文の配列。
+        decisions: 決まったこと / reasons: オーナーがこだわり・理由・気持ちを口にしたもの（何についてかと、オーナーの言葉をなるべくそのまま。AI が人柄や性格を推測して書かない） /
+        unresolved: 未解決・次に続くこと。どれも 1 項目 1 文の配列。
         会話になかったことは書かない。大脳皮質には書かれず、今夜の睡眠で選ばれたものだけが記憶になる。"""
         return guarded(brain.submit_daily_log, _session(exo_session, session_id), thread_title, events or [], corrections or [],
-                       learnings or [], decisions or [], unresolved or [], ai_model)
+                       learnings or [], decisions or [], unresolved or [], ai_model, reasons=reasons or [])
 
     @server.tool(annotations=appends)
     def deposit(thread_title: str, summary: str = "", procedural: list[str] | None = None,
                 semantic: list[str] | None = None, episodes: list[str] | None = None, note_type: str = "",
-                confidential: bool = False, exo_session: str = "", session_id: str = "") -> dict[str, Any]:
+                confidential: bool = False, reasons: list[str] | None = None, exo_session: str = "", session_id: str = "") -> dict[str, Any]:
         """オーナーが「/預けて」「exobrain に預けて」と言ったときに呼ぶ。この会話（前に預けたあとの部分）を要約して預ける。
-        summary: 何の会話か（数行）。procedural: やり方・ルール・好み・注意されたこと。semantic: 事実・決定・
+        summary: 何の会話か（数行）。procedural: やり方・ルール・好み・注意されたこと。
+        reasons: オーナーがこだわり・理由・気持ちを口にしたもの（何についてかと、オーナーの言葉をなるべくそのまま。AI が人柄や性格を推測して書かない）。semantic: 事実・決定・
         オーナーの仕事の状況・考えていること。episodes: 出来事。どれも 1 項目 1 文で、誰の話かを主語で書く。
         note_type: 取材の会話なら 'interview'、クライアントの話なら 'client'、オーナー自身の話なら ''。
         confidential: 外に出したくない内容なら true（本棚にだけ置く）。どれか迷ったら、預ける前にオーナーに聞く。
         返り値の message_to_user をそのままオーナーに伝える。"""
         return guarded(brain.deposit, _session(exo_session, session_id), thread_title, summary, procedural or [], semantic or [],
-                       episodes or [], note_type, confidential)
+                       episodes or [], note_type, confidential, reasons or [])
 
     @server.tool(annotations=appends)
     def good(praised: str, owner_words: str = "/good",
@@ -204,8 +206,8 @@ def build_sleep_server(brain: Brain, run_id: str) -> MCPServer:
     @server.tool(annotations=appends)
     def sleep_apply(batch_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
         """束の結果を書き込む。results は item ごとに {item_id, ...}。
-        write_daily: {item_id, events, corrections, learnings, decisions, unresolved, skip}。
-        write_deposit: {item_id, summary, procedural, semantic, episodes, note_type, skip}。
+        write_daily: {item_id, events, corrections, learnings, decisions, reasons, unresolved, skip}。
+        write_deposit: {item_id, summary, procedural, reasons, semantic, episodes, note_type, skip}。
         promote: {item_id, atoms: [{kind, text, derivation, lines, confidence, concepts, same_as?, supersedes?}]}。
         reconcile: {item_id, action: keep_both|supersede|merge, keep_id?, lesson?}。
         verify_links: {item_id, keep: [[src, dst]], drop: [[src, dst]]}。

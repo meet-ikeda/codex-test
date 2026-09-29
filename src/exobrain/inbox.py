@@ -100,7 +100,8 @@ def current_cursor(brain: Brain, key: str) -> str | None:
     return row[0] if row else None
 
 
-def file_daily(brain: Brain, text: str, origin_file: str | None = None, actor: str | None = None) -> dict | None:
+def file_daily(brain: Brain, text: str, origin_file: str | None = None, actor: str | None = None,
+               extra_meta: dict | None = None) -> dict | None:
     """File an AI daily log after checking that it continues its thread. Raises DailyRejected."""
     meta = daily.parse(text)
     if meta is None:
@@ -109,12 +110,14 @@ def file_daily(brain: Brain, text: str, origin_file: str | None = None, actor: s
         if not daily.check_continuity(meta, current_cursor(brain, meta.key)):
             return None
         f = meta.fields
+        metadata = {k: f[k] for k in ("source", "ai_provider", "ai_product", "ai_model", "thread_id", "entry_date",
+                                      "period_start", "period_end", "generated_at") if f.get(k)}
+        metadata.update(extra_meta or {})
         return add_source(
             brain, kind="ai_daily", author="ai", ai_name=meta.ai_name,
             title=f"AI日報 · {meta.thread_title} · {f['entry_date']}", body=text,
             actor=actor or f"ai:{meta.ai_name}", origin_file=origin_file, checkpoint=meta,
-            meta={k: f[k] for k in ("source", "ai_provider", "ai_product", "ai_model", "thread_id", "entry_date",
-                                    "period_start", "period_end", "generated_at") if f.get(k)},
+            meta=metadata,
         )
 
 

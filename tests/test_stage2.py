@@ -2,7 +2,7 @@
 
 import json
 
-from exobrain import safety, sleep, transcripts
+from exobrain import daily, inbox, promote, safety, sleep, transcripts
 from exobrain.brain import Brain
 from exobrain.config import Settings
 from exobrain.cortex_export import export
@@ -78,16 +78,34 @@ def test_transcripts_keep_only_the_owners_conversations(tmp_path):
     assert transcripts.since_utc("2026-09-27").endswith("Z")
 
 
+def test_long_transcript_is_split_without_losing_the_middle_and_keeps_prior_context():
+    messages = [
+        transcripts.Message(f"2026-09-27T01:00:0{i}Z", "owner" if i % 2 == 0 else "ai", f"marker-{i}-" + "長" * 80)
+        for i in range(8)
+    ]
+    parts = transcripts.excerpt_parts(messages[2:], max_chars=260)
+    joined = "\n".join(parts)
+    assert len(parts) > 1 and all(f"marker-{i}" in joined for i in range(2, 8))
+    assert "途中を省略" not in joined
+    context = transcripts.context_before(messages, messages[2].at)
+    assert "marker-0" in context and "marker-1" in context and "marker-2" not in context
+
+
 def test_nightly_daily_logs_are_written_and_continue_their_thread(tmp_path):
     s = Settings(home=tmp_path / "h", drive_root=tmp_path / "d", embed_model="", daily_logs_since="2026-09-01",
                  codex_sessions=codex_home(tmp_path), claude_projects=claude_home(tmp_path))
     with Brain(s) as b:
         def answer(item):
             if item["type"] == "write_daily":
-                assert "秘密の設定" not in item["conversation"] and "オーナー" in item["conversation"]
+                conversation = item.get("conversation") or "\n".join(item["conversation_parts"])
+                assert "秘密の設定" not in conversation and "オーナー" in conversation
+                assert not ({"conversation", "conversation_parts"} <= item.keys()) and not item["truncated"]
                 return {"item_id": item["item_id"], "events": [f"{item['thread']['title']} の相談"],
                         "decisions": ["決めたこと"]}
             if item["type"] == "promote":
+                kind = b._conn.execute("SELECT kind FROM sources WHERE id = ?", (item["source_id"],)).fetchone()[0]
+                if kind == "ai_daily":
+                    assert item["evidence"]["source_id"]
                 return {"item_id": item["item_id"], "atoms": []}
             return {"item_id": item["item_id"], "keep": [], "drop": [], "assignments": {}}
 
@@ -101,12 +119,72 @@ def test_nightly_daily_logs_are_written_and_continue_their_thread(tmp_path):
         logs = b._conn.execute("SELECT title, ai_name FROM sources WHERE kind = 'ai_daily' ORDER BY title").fetchall()
         assert [tuple(r) for r in logs] == [("AI日報 · 採用サイト · 2026-09-27", "Codex"),
                                             ("AI日報 · 見積書アプリ · 2026-09-27", "Claude Code")]
+        excerpts = b._conn.execute("SELECT id FROM sources WHERE kind = 'conversation_excerpt'").fetchall()
+        assert len(excerpts) == 2
+        assert b._conn.execute(
+            "SELECT COUNT(*) FROM hippocampus h JOIN sources s ON s.id = h.source_id"
+            " WHERE s.kind = 'conversation_excerpt'").fetchone()[0] == 0
+        meta = json.loads(b._conn.execute(
+            "SELECT meta_json FROM sources WHERE kind = 'ai_daily' ORDER BY title LIMIT 1").fetchone()[0])
+        assert meta["conversation_source_id"] in {r[0] for r in excerpts}
         assert b._conn.execute("SELECT cursor FROM ai_checkpoints WHERE key = 'codex:T1'").fetchone()[0] \
             == "2026-09-27T01:00:09Z"
         # The next night there is nothing new.
         run2, _ = sleep.start(b)
         batch = sleep.next_batch(b, sleep.SleepState(run2))
         assert batch["done"] or all(i["type"] != "write_daily" for i in batch["items"])
+
+
+def test_daily_quality_check_rejects_unsupported_identifiers_and_near_miss_katakana():
+    import pytest
+    from exobrain.brain import InvalidInput
+
+    conversation = "オーナーはクライアントの方針を確認した。件数は12件。"
+    with pytest.raises(InvalidInput, match="確認できない"):
+        sleep._daily_quality_check({"events": ["件数は95件だった"]}, conversation)
+    with pytest.raises(InvalidInput, match="文字崩れ"):
+        sleep._daily_quality_check({"events": ["クリエントの方針を確認した"]}, conversation)
+
+
+def test_daily_promotion_requires_and_links_raw_conversation_evidence(tmp_path):
+    s = Settings(home=tmp_path / "h", drive_root=tmp_path / "d", embed_model="")
+    with Brain(s) as b:
+        raw = inbox.add_source(
+            b, kind="conversation_excerpt", author="conversation", ai_name="Codex",
+            title="会話抜粋 · 採用サイト", body="[オーナー] 採用写真は社内で撮ることにした。",
+            origin_file="codex/T1", hippocampus=False,
+        )
+        fields = {
+            "source": "codex", "ai_provider": "openai", "ai_product": "Codex", "ai_model": "test",
+            "generated_at": "2026-09-27T10:00:00+09:00", "thread_id": "T1", "entry_date": "2026-09-27",
+            "period_start": "2026-09-27T09:00:00+09:00", "period_end": "2026-09-27T10:00:00+09:00",
+            "previous_cursor": "", "cursor": "2026-09-27T01:00:09Z",
+        }
+        report = daily.render(fields, "採用サイト", {"decisions": ["採用写真は社内で撮ることにした。"]})
+        filed = inbox.file_daily(
+            b, report, origin_file="codex/T1", extra_meta={"conversation_source_id": raw["source_id"]})
+        body = (b.settings.drive_root / b._conn.execute(
+            "SELECT path FROM sources WHERE id = ?", (filed["source_id"],)).fetchone()[0]).read_text()
+        heading, start, end = next(x for x in promote._daily_sections(body) if x[0] == "決まったこと")
+        seg = promote.Segment(filed["source_id"], start, end, "explicit")
+        item = promote.make_item(b, seg, "\n".join(body.splitlines()[start - 1:end]))
+        decision_line = next(n for n, text in item["lines"] if "社内で撮る" in text)
+        atom = {"kind": "semantic", "text": "採用写真は社内で撮ることにした。", "derivation": "paraphrase",
+                "lines": [decision_line, decision_line], "confidence": 0.9, "concepts": ["採用写真"]}
+        import pytest
+        from exobrain.brain import InvalidInput
+
+        with pytest.raises(InvalidInput, match="evidence_lines"):
+            promote.validate(b, item, {"atoms": [atom]})
+        evidence_line = next(n for n, text in item["evidence"]["lines"] if "社内で撮る" in text)
+        atom["evidence_lines"] = [evidence_line, evidence_line]
+        atoms = promote.validate(b, item, {"atoms": [atom]})
+        with b._tx():
+            promote.apply(b, "test", item, atoms)
+        node_id = b._conn.execute("SELECT id FROM nodes WHERE body = ?", (atom["text"],)).fetchone()[0]
+        source_ids = {r[0] for r in b._conn.execute(
+            "SELECT source_id FROM node_sources WHERE node_id = ?", (node_id,))}
+        assert source_ids == {filed["source_id"], raw["source_id"]}
 
 
 def test_nothing_is_read_until_the_owner_sets_a_start_date(tmp_path):
@@ -468,3 +546,26 @@ def test_gemini_daily_without_cursors_is_filed_once_and_promotes_its_decisions(t
         items = [i for i in sleep.next_batch(b, sleep.SleepState(run_id))["items"] if i["type"] == "promote"]
         texts = ["\n".join(t for _, t in i["lines"]) for i in items]
         assert len(items) == 1 and "社員の言葉" in texts[0]
+
+
+def test_reasons_section_is_an_explicit_signal():
+    """The owner's why (こだわり・理由) has its own section in daily logs and deposits, and sleep promotes it."""
+    from exobrain import daily, deposit
+
+    fields = {"source": "codex", "ai_provider": "openai", "ai_product": "Codex", "ai_model": "test",
+              "generated_at": "2026-09-29T10:00:00+09:00", "thread_id": "T9", "entry_date": "2026-09-29",
+              "period_start": "2026-09-29T09:00:00+09:00", "period_end": "2026-09-29T10:00:00+09:00",
+              "previous_cursor": "", "cursor": "c1"}
+    body = daily.render(fields, "UI", {"reasons": ["設定画面について「ユーザーに考えさせるUIは嫌」と言った"]})
+    assert "## オーナーのこだわり・理由\n\n- 設定画面について" in body
+    assert "オーナーのこだわり・理由" in promote.DAILY_EXPLICIT_SECTIONS
+    dep = deposit.render("chatgpt", "UI", {"summary": "s", "reasons": ["「直感的にしたい」と言った"]})
+    assert "## こだわり・理由（オーナー本人の言葉）\n\n- 「直感的にしたい」と言った" in dep
+
+
+def test_long_thread_is_split_and_capped_per_night():
+    from exobrain import sleep, transcripts
+
+    msgs = [transcripts.Message(role="user", text="あ" * 1000, at=f"2026-09-29T00:{i:02d}:00Z") for i in range(60)]
+    groups = transcripts.split_messages(msgs, max_chars=5000)
+    assert [m for g in groups for m in g] == msgs and len(groups) > sleep.MAX_DAILY_PARTS
