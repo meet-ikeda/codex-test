@@ -16,7 +16,7 @@ from pathlib import Path
 INBOX_DIR = "受け取り箱"
 BOOKSHELF_DIR = "本棚"
 ORIGINALS_DIR = "原文"
-SHELVES_DIR = "棚"
+SHELVES_DIR = "棚"  # v0.1's shelf folder; replaced by 本棚/話題 and 本棚/目次 (spec v0.7 §8)
 DREAMS_DIR = "夢日記"
 BACKUP_DIR = "バックアップ"
 
@@ -74,8 +74,7 @@ class Settings:
         return self.inbox / AI_DAILY_DIR
 
     def ensure_dirs(self) -> None:
-        for d in (self.home, self.inbox, self.ai_daily_inbox, self.originals, self.bookshelf / SHELVES_DIR,
-                  self.backups):
+        for d in (self.home, self.inbox, self.ai_daily_inbox, self.originals, self.backups):
             d.mkdir(parents=True, exist_ok=True)
 
 

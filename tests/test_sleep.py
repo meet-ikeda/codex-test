@@ -271,7 +271,7 @@ def test_run_without_ai_writes_a_journal(brain, settings, session):
     assert "新しく結んだつながりの候補: 1 本" in text and "テストでは AI を使わない" in text
     assert not sleep.is_due(brain)
     assert sleep.is_due(brain, now=datetime.now(timezone.utc) + timedelta(hours=21))
-    assert (settings.bookshelf / "棚" / "夢日記.md").exists()
+    assert (settings.bookshelf / "目次" / "夢日記.md").exists()
     assert len(safety.list_backups(settings.backups)) == 1
     assert brain.verify()[0]
 
@@ -285,10 +285,10 @@ def test_shelf_index_links_open_the_originals(brain, settings, session):
     from urllib.parse import unquote
 
     names = write_shelf_index(brain)
-    assert "話題_exobrain 開発.md" in names and "日付別.md" in names and "出所別.md" in names
-    text = (settings.bookshelf / "棚" / "話題_exobrain 開発.md").read_text(encoding="utf-8")
-    target = unquote(text.split("](")[1].split(")")[0])
-    assert (settings.bookshelf / "棚" / target).resolve() == (settings.drive_root / r["path"]).resolve()
+    assert "話題/exobrain 開発.md" in names and "目次/出所別.md" in names and "はじめに.md" in names
+    text = (settings.bookshelf / "話題" / "exobrain 開発.md").read_text(encoding="utf-8")
+    target = unquote(text.split("## 登場した資料")[1].split("](")[1].split(")")[0])
+    assert (settings.bookshelf / "話題" / target).resolve() == (settings.drive_root / r["path"]).resolve()
 
 
 def test_only_one_sleep_at_a_time(brain):
