@@ -14,7 +14,7 @@ import threading
 import time
 import unicodedata
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from . import events
@@ -50,6 +50,10 @@ AUTO_LOGGED_AIS = ("codex", "claude code")  # their conversations are read from 
 FALLBACK_KEEP = 0.6  # share of the recall budget the cortex keeps when records are looked up too
 
 ELEMENT_KINDS = ("episode", "semantic", "procedural")
+# A light ontology (2026-09-30): what kind of thing a concept is, and its other names. Few types on purpose;
+# add one only when real memories need it.
+CONCEPT_TYPES = {"person": "人", "organization": "会社・組織", "project": "案件", "tool": "道具・サービス",
+                 "place": "場所", "topic": "話題"}
 KIND_LABEL_JA = {"episode": "出来事", "semantic": "知識", "procedural": "ルール", "concept": "概念"}
 
 PROJECTION_SCHEMA = """
@@ -135,6 +139,10 @@ CREATE TABLE IF NOT EXISTS revisions (
     episode_id TEXT, source_id TEXT, actor TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS revisions_node ON revisions(node_id);
+-- Other names of a concept (「A社様」→「A社」), so one thing is not scattered over several names.
+CREATE TABLE IF NOT EXISTS concept_aliases (
+    norm TEXT PRIMARY KEY, concept_id TEXT NOT NULL, alias TEXT NOT NULL, at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS node_vectors (
     node_id TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (node_id, model)
 );
@@ -145,7 +153,7 @@ CREATE TABLE IF NOT EXISTS chunk_vectors (
 """
 PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions", "session_items", "source_fts", "shelves",
                      "sleep_runs", "sleep_marks", "chunks", "chunk_fts", "hippocampus", "ai_checkpoints",
-                     "node_sources", "revisions")
+                     "node_sources", "revisions", "concept_aliases")
 
 
 class InvalidInput(ValueError):
@@ -158,6 +166,15 @@ class Element:
     text: str
     concepts: list[str]
     importance: float
+    concept_meta: dict = field(default_factory=dict)  # name -> {"type": ..., "aliases": [...]}
+
+
+def split_concept(raw: Any) -> tuple[str, str | None]:
+    """「[[A社|A社様]]」「A社|A社様」→ ("A社", "A社様"): the Obsidian way of writing a link under another name."""
+    s = " ".join(str(raw).split()).removeprefix("[[").removesuffix("]]")
+    name, _, alias = s.partition("|")
+    name, alias = name.split("#")[0].strip(), alias.strip()
+    return name, (alias if alias and alias != name else None)
 
 
 def new_id(prefix: str) -> str:
@@ -192,11 +209,21 @@ def parse_elements(raw: Iterable[Any]) -> list[Element]:
                 f"elements[{i}].text が {len(text)} 文字あります。1 要素は {TEXT_MAX} 文字までです。"
                 "1 つの事実・出来事・ルールごとに分けてください。"
             )
-        concepts = []
+        concepts, meta = [], {}
         for c in e.get("concepts") or []:
-            c = " ".join(str(c).split())
-            if c and c not in concepts:
+            info = c if isinstance(c, dict) else {"name": c}
+            c, alias = split_concept(info.get("name") or "")
+            if not c:
+                continue
+            ctype = info.get("type") or None
+            if ctype and ctype not in CONCEPT_TYPES:
+                raise InvalidInput(f"elements[{i}].concepts の type は {', '.join(CONCEPT_TYPES)} のいずれかです（{ctype!r}）。")
+            aliases = [a for a in [alias, *(info.get("aliases") or [])] if a]
+            if c not in concepts:
                 concepts.append(c)
+            m = meta.setdefault(c, {"type": None, "aliases": []})
+            m["type"] = m["type"] or ctype
+            m["aliases"] += [a for a in aliases if a not in m["aliases"]]
         if len(concepts) > CONCEPTS_MAX:
             raise InvalidInput(f"elements[{i}].concepts は {CONCEPTS_MAX} 個までです。")
         if any(len(c) > CONCEPT_LEN_MAX for c in concepts):
@@ -207,7 +234,7 @@ def parse_elements(raw: Iterable[Any]) -> list[Element]:
             raise InvalidInput(f"elements[{i}].importance は 0〜1 の数にしてください。") from None
         if not 0.0 <= importance <= 1.0:
             raise InvalidInput(f"elements[{i}].importance は 0〜1 の数にしてください。")
-        out.append(Element(kind, text, concepts, importance))
+        out.append(Element(kind, text, concepts, importance, meta))
     return out
 
 
@@ -249,7 +276,7 @@ class Brain:
                 self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
         for col, decl in (("promoted_by", "TEXT"), ("derivation", "TEXT"), ("confidence", "REAL"),
                           ("occurrences", "INTEGER NOT NULL DEFAULT 1"), ("goods", "INTEGER NOT NULL DEFAULT 0"),
-                          ("about", "TEXT"), ("subject", "TEXT")):
+                          ("about", "TEXT"), ("subject", "TEXT"), ("concept_type", "TEXT")):
             if col not in cols:
                 self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {decl}")
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(sources)")}
@@ -439,6 +466,11 @@ class Brain:
         elif ev.type == "sleep_finished":
             c.execute("UPDATE sleep_runs SET finished_at = ?, summary = ?, journal_source_id = ? WHERE id = ?",
                       (ev.at, p["summary"], p.get("journal_source_id"), p["id"]))
+        elif ev.type == "concept_described":
+            if p.get("type"):
+                c.execute("UPDATE nodes SET concept_type = ? WHERE id = ?", (p["type"], p["id"]))
+            c.executemany("INSERT OR IGNORE INTO concept_aliases (norm, concept_id, alias, at) VALUES (?, ?, ?, ?)",
+                          [(normalize_concept(a), p["id"], a, ev.at) for a in p.get("aliases") or []])
         elif ev.type == "session_started":
             c.execute(
                 "INSERT INTO sessions (id, ai_name, started_at, last_seen_at) VALUES (?, ?, ?, ?)",
@@ -488,13 +520,35 @@ class Brain:
 
     # ---- building blocks --------------------------------------------------
 
-    def _concept_id(self, actor: str, name: str) -> str:
+    def _concept_id(self, actor: str, name: str, meta: dict | None = None) -> str:
+        """The concept for a name (or one of its other names); a new one if unknown. The type and other names
+        given with it are kept; a type already set is not overwritten (deciding between two is a later job)."""
         norm = normalize_concept(name)
-        row = self._conn.execute("SELECT id FROM nodes WHERE kind = 'concept' AND norm = ?", (norm,)).fetchone()
+        row = self._conn.execute("SELECT id, concept_type FROM nodes WHERE kind = 'concept' AND norm = ?",
+                                 (norm,)).fetchone()
+        if row is None:
+            row = self._conn.execute(
+                "SELECT n.id, n.concept_type FROM concept_aliases a JOIN nodes n ON n.id = a.concept_id"
+                " WHERE a.norm = ?", (norm,)).fetchone()
         if row:
-            return row["id"]
-        nid = new_id("c")
-        self._emit(actor, "node_added", {"id": nid, "kind": "concept", "label": name[:LABEL_LEN], "norm": norm})
+            nid, current = row["id"], row["concept_type"]
+        else:
+            nid, current = new_id("c"), None
+            self._emit(actor, "node_added", {"id": nid, "kind": "concept", "label": name[:LABEL_LEN], "norm": norm})
+        meta = meta or {}
+        ctype = meta.get("type") if meta.get("type") in CONCEPT_TYPES and not current else None
+        aliases = []
+        for a in meta.get("aliases") or []:
+            an = normalize_concept(a)
+            if an == norm or len(a) > CONCEPT_LEN_MAX:
+                continue
+            taken = self._conn.execute("SELECT 1 FROM nodes WHERE kind = 'concept' AND norm = ?"
+                                       " UNION SELECT 1 FROM concept_aliases WHERE norm = ?", (an, an)).fetchone()
+            if not taken:  # a name that is already its own concept is not merged here
+                aliases.append(a)
+        if ctype or aliases:
+            self._emit(actor, "concept_described", {"id": nid, **({"type": ctype} if ctype else {}),
+                                                    **({"aliases": aliases} if aliases else {})})
         return nid
 
     def _edge_weight(self, src: str, dst: str, kind: str) -> float:
@@ -533,7 +587,7 @@ class Brain:
                                              "importance": el.importance,
                                              **({"promoted_by": promoted_by} if promoted_by else {}),
                                              **(extra or {})})
-            concept_ids = [self._concept_id(actor, c) for c in el.concepts]
+            concept_ids = [self._concept_id(actor, c, el.concept_meta.get(c)) for c in el.concepts]
             for cid in concept_ids:
                 self._link(actor, nid, cid, "about", W_ABOUT, "ai")
             created.append({"id": nid, "kind": el.kind, "label": make_label(el.text),

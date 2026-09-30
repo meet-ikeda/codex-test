@@ -569,3 +569,32 @@ def test_long_thread_is_split_and_capped_per_night():
     msgs = [transcripts.Message(role="user", text="あ" * 1000, at=f"2026-09-29T00:{i:02d}:00Z") for i in range(60)]
     groups = transcripts.split_messages(msgs, max_chars=5000)
     assert [m for g in groups for m in g] == msgs and len(groups) > sleep.MAX_DAILY_PARTS
+
+
+def test_marked_names_become_typed_concepts_with_aliases(brain):
+    """[[名前|別名]] in the original becomes a concept on its own; the AI's type is kept; the other name finds it."""
+    from exobrain import inbox
+
+    b = brain
+    src = inbox.add_memo(b, "打ち合わせメモ", "- [[A社|A社様]]の採用サイトは写真を社内で撮る\n> 考えさせるUIは嫌\n")
+    sid = src["source_id"]
+    lines = [[i, x] for i, x in enumerate(b.settings.drive_root.joinpath(
+        b._conn.execute("SELECT path FROM sources WHERE id = ?", (sid,)).fetchone()[0]).read_text().splitlines(), 1)]
+    n = next(i for i, x in lines if "A社様" in x)
+    q = next(i for i, x in lines if x.startswith(">"))
+    item = {"source_id": sid, "signal": "explicit", "lines": lines, "similar_memories": [], "max_atoms": 8}
+    atoms = promote.validate(b, item, {"atoms": [
+        {"kind": "semantic", "text": "[[A社|A社様]]の採用サイトは写真を社内で撮る", "derivation": "verbatim",
+         "lines": [n, n], "confidence": 0.9, "concepts": [{"name": "A社", "type": "organization"}]},
+        {"kind": "procedural", "text": "考えさせるUIは嫌", "derivation": "verbatim", "lines": [q, q],
+         "confidence": 0.9, "concepts": []}]})
+    assert atoms[0]["text"] == "A社様の採用サイトは写真を社内で撮る" and atoms[0]["derivation"] == "verbatim"
+    assert atoms[1]["derivation"] == "verbatim"
+    assert atoms[0]["concepts"] == ["A社"] and atoms[0]["concept_meta"]["A社"] == {"type": "organization", "aliases": ["A社様"]}
+    with b._tx():
+        promote.apply(b, "test", item, atoms)
+    c = b._conn.execute("SELECT id, concept_type FROM nodes WHERE kind = 'concept' AND label = 'A社'").fetchone()
+    assert c["concept_type"] == "organization"
+    assert b._concept_id("test", "A社様") == c["id"]  # the other name leads to the same thing
+    assert c["id"] in b._recaller.seeds("A社様の件どうなった", None)
+    assert b.rebuild() > 0 and b._conn.execute("SELECT concept_id FROM concept_aliases").fetchone()[0] == c["id"]

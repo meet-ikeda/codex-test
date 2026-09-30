@@ -109,7 +109,8 @@ def build_server(brain: Brain) -> MCPServer:
         events: 今日の出来事 / corrections: オーナーから注意・訂正されたこと / learnings: 工夫・学び /
         decisions: 決まったこと / reasons: オーナーがこだわり・理由・気持ちを口にしたもの（何についてかと、オーナーの言葉をなるべくそのまま。AI が人柄や性格を推測して書かない） /
         unresolved: 未解決・次に続くこと。どれも 1 項目 1 文の配列。
-        会話になかったことは書かない。大脳皮質には書かれず、今夜の睡眠で選ばれたものだけが記憶になる。"""
+        会話になかったことは書かない。大脳皮質には書かれず、今夜の睡眠で選ばれたものだけが記憶になる。
+        固有名詞（人・会社・案件・道具・場所）と大事な話題は、各項目で初めて出るときに [[名前]] と書く。会話に出た表記をそのまま使い、同じものが別の呼び方で出たら [[いつもの名前|会話での呼び方]] と書く。オーナーの言葉をそのまま書く項目は、先頭を「> 」にする。"""
         return guarded(brain.submit_daily_log, _session(exo_session, session_id), thread_title, events or [], corrections or [],
                        learnings or [], decisions or [], unresolved or [], ai_model, reasons=reasons or [])
 
@@ -123,6 +124,7 @@ def build_server(brain: Brain) -> MCPServer:
         オーナーの仕事の状況・考えていること。episodes: 出来事。どれも 1 項目 1 文で、誰の話かを主語で書く。
         note_type: 取材の会話なら 'interview'、クライアントの話なら 'client'、オーナー自身の話なら ''。
         confidential: 外に出したくない内容なら true（本棚にだけ置く）。どれか迷ったら、預ける前にオーナーに聞く。
+        固有名詞（人・会社・案件・道具・場所）と大事な話題は、各項目で初めて出るときに [[名前]] と書く。会話に出た表記をそのまま使い、同じものが別の呼び方で出たら [[いつもの名前|会話での呼び方]] と書く。オーナーの言葉をそのまま書く項目は、先頭を「> 」にする。
         返り値の message_to_user をそのままオーナーに伝える。"""
         return guarded(brain.deposit, _session(exo_session, session_id), thread_title, summary, procedural or [], semantic or [],
                        episodes or [], note_type, confidential, reasons or [])

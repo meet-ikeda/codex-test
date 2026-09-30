@@ -101,6 +101,10 @@ class Recaller:
                 idx.concepts.append((r[0], r[2], bigrams(r[2])))
             elif r[3]:
                 idx.elements.append((r[0], bigrams(r[3])))
+        for cid, alias in self.conn.execute(
+                "SELECT a.concept_id, a.alias FROM concept_aliases a JOIN nodes n ON n.id = a.concept_id"
+                " WHERE n.status = 'active'"):
+            idx.concepts.append((cid, normalize(alias), bigrams(alias)))  # 「A社様」finds A社 too
         self.index = idx
 
     def seeds(self, cue: str, session_id: str | None) -> dict[str, float]:

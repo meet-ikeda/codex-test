@@ -15,6 +15,7 @@ says the same as an existing memory adds evidence to it instead of a new memory.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterator
 
@@ -34,6 +35,8 @@ REPEAT_SIM = 0.80  # bge-m3 cosine for "the same thing said again" — provision
 IMPORTANCE = {"explicit": 1.0, "demand": 0.8, "repetition": 0.6, "association": 0.4}  # OUTBRAIN v0.4 §7.2 "I"
 DERIVATIONS = ("verbatim", "paraphrase", "inferred")
 NOTHING = ("特になし", "なし", "")
+WIKILINK = re.compile(r"\[\[([^\]\n]+?)\]\]")  # [[A社]] / [[A社|A社様]]: a name marked by whoever wrote the note
+KNOWN_CONCEPTS_SHOWN = 20
 # The day something was said: an AI daily log's entry_date, otherwise the day it was filed.
 _DAY = "COALESCE(json_extract(meta_json, '$.entry_date'), substr(created_at, 1, 10))"
 
@@ -177,6 +180,11 @@ NOTE_TYPE_HINT = {
 REASON_RULE = ("ルールや決定に、オーナーが言った理由・こだわりが原文にあれば、原子の文に「（理由: …）」として含め、"
                "その行も lines に含める。オーナーの人柄・性格・美学を推測した原子は作らない"
                "（「オーナーは〜を嫌う人だ」ではなく、オーナーが言ったことと、何についての話かを書く）。")
+LINK_RULE = ("原文の [[名前]] は、書いた人が印を付けた固有名詞・話題。[[名前|別名]] は「別名」で書かれた「名前」のこと。"
+             "「> 」で始まる行はオーナーの言葉そのまま。原子にするときは言葉を変えず derivation=verbatim にする。"
+             "concepts は {name, type} で返す。type: person（人）/ organization（会社・組織）/ project（案件）/ "
+             "tool（道具・サービス）/ place（場所）/ topic（話題）。known_concepts にある話題と同じものは、"
+             "その name をそのまま使う（表記を変えない）。原子の text には [[ ]] を書かない。")
 PERSONAL_INFO_RULE = ("電話番号・住所・メールアドレス・口座などの個人情報や、パスワード・鍵は、原子に書かない。")
 DEPOSIT_HINT = ("これはオーナーが預けると決めた会話を、その会話の AI がまとめたもの。見出しの種類（手続き・意味・"
                 "エピソード）は目安で、中身に合わせて kind を決めてよい。オーナーの仕事の状況や考えも semantic として拾う。")
@@ -233,6 +241,7 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
         "source": {"title": s["title"], "writer": s["ai_name"] if s["author"] == "ai" else "オーナー",
                    "date": s["created_at"][:10]},
         "lines": numbered, "similar_memories": similar_memories(brain, text),
+        "known_concepts": known_concepts(brain, text),
         "instructions": (
             NOTE_TYPE_HINT.get(note_type, "") + (f"（この話の相手: {subject}）" if subject else "")
             + (DEPOSIT_HINT if s["kind"] == "deposit" else OWNER_NOTE_HINT if owner_note and not note_type else "")
@@ -245,7 +254,7 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
             + ("evidence は日報の元になった会話抜粋。各原子について、内容を裏づける連続した原会話の"
                "evidence_lines: [開始, 終了] を必ず返す。裏づけが見つからない原子は作らない。"
                if evidence else "")
-            + "confidence: 0〜1。concepts: 固有名詞・話題を 8 個まで。"
+            + LINK_RULE + "confidence: 0〜1。concepts: 固有名詞・話題を 8 個まで。"
             "similar_memories と同じ内容なら same_as にその id を入れる（新しく作らない）。"
             "similar_memories の内容を新しい決定が置き換えるなら supersedes にその id を入れる。"
             "about: その記憶が誰についてか（owner=オーナー / client=クライアント / interviewee=取材相手 / other）。"
@@ -256,18 +265,43 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
     }
 
 
+def known_concepts(brain: Brain, text: str) -> list[dict]:
+    """Concepts already in the brain whose name (or other name) shares text with this passage: shown so that
+    the same thing keeps the same name."""
+    from .recall import bigrams, overlap
+
+    marked = {m.split("|")[0].strip() for m in WIKILINK.findall(text)}
+    bg = bigrams(text)
+    scored = {}
+    rows = brain._conn.execute(
+        "SELECT id, label, concept_type, label AS name FROM nodes WHERE kind = 'concept' AND status = 'active'"
+        " UNION ALL SELECT n.id, n.label, n.concept_type, a.alias FROM concept_aliases a"
+        " JOIN nodes n ON n.id = a.concept_id WHERE n.status = 'active'").fetchall()
+    for r in rows:
+        s = 1.0 if r["name"] in marked else overlap(bg, bigrams(r["name"]))
+        if s >= 0.5 and s > scored.get(r["id"], (0,))[0]:
+            scored[r["id"]] = (s, r)
+    best = sorted(scored.values(), key=lambda x: -x[0])[:KNOWN_CONCEPTS_SHOWN]
+    return [{"name": r["label"], **({"type": r["concept_type"]} if r["concept_type"] else {})} for _, r in best]
+
+
+def unlink(text: str) -> str:
+    """[[A社|A社様]] → A社様, [[A社]] → A社: the words as they read."""
+    return WIKILINK.sub(lambda m: (m.group(1).split("|", 1) + [""])[1].strip() or m.group(1).split("|")[0].strip(),
+                        text)
+
+
 def _norm(text: str) -> str:
-    """For comparing wording: width, spaces, list marks and final punctuation do not count."""
-    import re
+    """For comparing wording: width, spaces, list and quote marks, [[ ]] and final punctuation do not count."""
     import unicodedata
 
-    t = unicodedata.normalize("NFKC", text)
-    t = re.sub(r"^[\s\-*・]+", "", t, flags=re.M)
+    t = unicodedata.normalize("NFKC", unlink(text))
+    t = re.sub(r"^[\s\-*・>]+", "", t, flags=re.M)
     return re.sub(r"[\s。．.、,]", "", t)
 
 
 def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
-    from .brain import CONCEPTS_MAX, ELEMENT_KINDS, TEXT_MAX, InvalidInput
+    from .brain import CONCEPTS_MAX, ELEMENT_KINDS, TEXT_MAX, InvalidInput, parse_elements
 
     atoms = res.get("atoms") or []
     limit = item.get("max_atoms", ATOMS_PER_SEGMENT)
@@ -280,7 +314,7 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
     evidence_lines = {n: t for n, t in (evidence or {}).get("lines", [])}
     out = []
     for i, a in enumerate(atoms):
-        kind, text = a.get("kind"), " ".join(str(a.get("text") or "").split())
+        kind, text = a.get("kind"), unlink(" ".join(str(a.get("text") or "").split()))
         if kind not in ELEMENT_KINDS:
             raise InvalidInput(f"atoms[{i}].kind は {', '.join(ELEMENT_KINDS)} のいずれかです。")
         if not text or len(text) > TEXT_MAX:
@@ -319,7 +353,21 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
         for key in ("same_as", "supersedes"):
             if a.get(key) and a[key] not in known:
                 raise InvalidInput(f"atoms[{i}].{key} には similar_memories にある id だけを入れてください。")
-        concepts = [" ".join(str(x).split())[:40] for x in (a.get("concepts") or []) if str(x).strip()][:CONCEPTS_MAX]
+        # The names the writer marked with [[ ]] in these lines come first: they are not left to the AI to notice.
+        from .brain import split_concept
+
+        raw_concepts, seen = [], set()
+        for c in [*WIKILINK.findall(quote), *(a.get("concepts") or [])]:
+            name = split_concept(c.get("name", "") if isinstance(c, dict) else c)[0]
+            if name and (name in seen or len(seen) < CONCEPTS_MAX):  # same name again: keeps its type/aliases
+                seen.add(name)
+                raw_concepts.append(c)
+        try:
+            el = parse_elements([{"kind": kind, "text": text, "concepts": raw_concepts}])[0]
+        except InvalidInput as e:
+            raise InvalidInput(f"atoms[{i}]: {e}") from None
+        concepts = [c[:40] for c in el.concepts][:CONCEPTS_MAX]
+        concept_meta = {c: el.concept_meta[c] for c in concepts if c in el.concept_meta}
         default_about = {"interview": "interviewee", "client": "client"}.get(item.get("note_type"), "owner")
         about = a.get("about") or default_about
         if about not in ABOUTS:
@@ -328,7 +376,7 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
         if about != "owner" and not subject and item.get("note_type"):
             raise InvalidInput(f"atoms[{i}] は {about} の話なので、subject に誰か（名前か役割）を入れてください。")
         out.append({"kind": kind, "text": text, "derivation": der, "lines": ln, "quote": quote,
-                    "confidence": round(conf, 3), "concepts": concepts, "about": about, "subject": subject,
+                    "confidence": round(conf, 3), "concepts": concepts, "concept_meta": concept_meta, "about": about, "subject": subject,
                     "same_as": a.get("same_as"), "supersedes": a.get("supersedes"),
                     "evidence_lines": evidence_range, "evidence_quote": evidence_quote})
     return out
@@ -359,7 +407,7 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
             counts["reinforced"] += 1
             continue
         created = brain._add_elements(
-            actor, [Element(a["kind"], a["text"], a["concepts"], IMPORTANCE[item["signal"]])], src,
+            actor, [Element(a["kind"], a["text"], a["concepts"], IMPORTANCE[item["signal"]], a.get("concept_meta") or {})], src,
             promoted_by=item["signal"], extra={"derivation": a["derivation"], "confidence": a["confidence"],
                                                "about": a["about"], **({"subject": a["subject"]} if a["subject"] else {})})
         nid = created[0]["id"]
