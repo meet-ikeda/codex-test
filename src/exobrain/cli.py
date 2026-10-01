@@ -221,6 +221,15 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("doctor", help="導入の状態を点検する")
     sub.add_parser("open", help="画面をブラウザで開く")
 
+    s = sub.add_parser("ask", help="脳と話す: 中に何があるか、自分がどう見えているかを聞く（Claude Code を使う）")
+    s.add_argument("question", nargs="*", help="省略すると、ターミナルで会話を始める")
+    s = sub.add_parser("look", help="脳の中を AI なしで見る（全体像・記憶の一覧・1つの記憶）")
+    s.add_argument("--kind", default="", help="procedural / semantic / episode")
+    s.add_argument("--topic", default="", help="話題名で絞る（例: ハピホテ）")
+    s.add_argument("--query", default="", help="本文に含む語で絞る")
+    s.add_argument("--id", default="", help="1つの記憶を詳しく見る")
+    s.add_argument("--limit", type=int, default=30)
+
     sub.add_parser("pause", help="AI からの書き込みを一時停止する")
     sub.add_parser("resume", help="一時停止を解除する")
     sub.add_parser("backup", help="脳のバックアップを作る")
@@ -316,6 +325,19 @@ def main(argv: list[str] | None = None) -> int:
                 report = doctor(brain.settings, Path.home(), brain)
                 print(report.text())
                 return 0 if report.ok else 1
+            elif a.cmd == "ask":
+                from .ask import ask
+
+                return ask(brain, " ".join(a.question).strip() or None)
+            elif a.cmd == "look":
+                from . import introspect
+
+                if a.id:
+                    _print(introspect.memory(brain, a.id))
+                elif a.kind or a.topic or a.query:
+                    _print(introspect.memories(brain, a.kind, a.query, a.topic, a.limit))
+                else:
+                    _print(introspect.overview(brain))
             elif a.cmd == "pause":
                 brain.set_paused(True)
                 print("一時停止しました。AI は記憶を追加できません（思い出すことはできます）。")

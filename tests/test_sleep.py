@@ -267,7 +267,7 @@ def test_run_without_ai_writes_a_journal(brain, settings, session):
     out = sleep.run(brain, runner=no_ai)
     journal = settings.drive_root / out["journal"]
     text = read_body(journal)
-    assert journal.parent.name == "09" and "夢日記" in journal.parts
+    assert journal.parent.name == f"{datetime.now():%m}" and "夢日記" in journal.parts
     assert "新しく結んだつながりの候補: 1 本" in text and "テストでは AI を使わない" in text
     assert not sleep.is_due(brain)
     assert sleep.is_due(brain, now=datetime.now(timezone.utc) + timedelta(hours=21))

@@ -229,14 +229,63 @@ def build_sleep_server(brain: Brain, run_id: str) -> MCPServer:
     return server
 
 
+INTROSPECT_INSTRUCTIONS = """\
+exobrain（オーナーの外部脳）の中を見る道具です。すべて読むだけで、記憶は変わりません。
+brain_overview で全体を見て、list_memories と open_memory で中身を確かめてから答えてください。"""
+
+
+def build_introspect_server(brain: Brain) -> MCPServer:
+    """Read-only tools for `exobrain ask`: the owner looks inside the brain (spec v0.7 §10)."""
+    from . import introspect
+
+    server = MCPServer(name="exobrain-introspect", instructions=INTROSPECT_INSTRUCTIONS)
+    reads = ToolAnnotations(read_only_hint=True)
+
+    def guarded(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except InvalidInput as e:
+            raise ToolError(str(e)) from None
+
+    @server.tool(annotations=reads)
+    def brain_overview() -> dict[str, Any]:
+        """脳の全体像: 種類・入った理由・誰の話かごとの件数、守るルール、強い記憶、よく出る話題。"""
+        return guarded(introspect.overview, brain)
+
+    @server.tool(annotations=reads)
+    def list_memories(kind: str = "", query: str = "", topic: str = "", limit: int = 30,
+                      offset: int = 0) -> dict[str, Any]:
+        """記憶の一覧。kind は procedural（ルール・やり方）/ semantic（事実・決定）/ episode（出来事）。
+        query は本文に含む語、topic は話題名（例: ハピホテ）。強い順。"""
+        return guarded(introspect.memories, brain, kind, query, topic, limit, offset)
+
+    @server.tool(annotations=reads)
+    def open_memory(memory_id: str) -> dict[str, Any]:
+        """1つの記憶の詳細: 根拠の原文の引用、つながっている記憶、書き換えの履歴。"""
+        return guarded(introspect.memory, brain, memory_id)
+
+    @server.tool(annotations=reads)
+    def open_source(source_id: str, max_chars: int = 8000) -> dict[str, Any]:
+        """本棚の原文を読む。"""
+        return guarded(brain.open_source, source_id, max(500, min(max_chars, 50_000)))
+
+    return server
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
     p = argparse.ArgumentParser(prog="exobrain-mcp")
     p.add_argument("--sleep", metavar="RUN_ID", help="睡眠用の道具だけを公開する（exobrain sleep が使う）")
+    p.add_argument("--introspect", action="store_true", help="脳の中を読むだけの道具を公開する（exobrain ask が使う）")
     a = p.parse_args(argv)
     brain = open_brain()
-    server = build_sleep_server(brain, a.sleep) if a.sleep else build_server(brain)
+    if a.sleep:
+        server = build_sleep_server(brain, a.sleep)
+    elif a.introspect:
+        server = build_introspect_server(brain)
+    else:
+        server = build_server(brain)
     server.run("stdio")
 
 

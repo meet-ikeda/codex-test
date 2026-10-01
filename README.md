@@ -61,6 +61,8 @@ exobrain backfill 01a0cc8f          # そのスレッドの過去分（毎晩の
 exobrain fade src_...              # 原文を海馬から外す（昇格させない。本棚には残る）
 exobrain memo 題名 < メモ.md
 exobrain search 語句
+exobrain ask [質問]   # 脳と話す（中身・自分がどう見えているか。読むだけ）
+exobrain look [--topic 話題] [--kind 種類] [--id 記憶]   # 脳の中を AI なしで見る
 exobrain sleep [--if-due] [--no-ai]   # 睡眠（AI による整理は Claude Code を使う）
 exobrain app      # 画面を開く（http://127.0.0.1:8765）
 exobrain pause / resume
