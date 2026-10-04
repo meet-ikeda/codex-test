@@ -1,0 +1,312 @@
+<title>exobrain 記憶の流れ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: one reading column; each flow is a numbered section (the order is the order data moves), diagram first, step table under it. */
+:root {
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --fg: #1b1c1e;
+  --muted: #5d6066;
+  --line: #d9dad6;
+  --alert: #c2362f;
+  --alert-bg: #fbeceb;
+  --todo: #6b5bd2;
+  --font-body: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141517; --panel: #1c1d20; --fg: #ececea; --muted: #a2a5ab; --line: #34363b;
+    --alert: #f07a72; --alert-bg: #3a2120; --todo: #a89cf5; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141517; --panel: #1c1d20; --fg: #ececea; --muted: #a2a5ab; --line: #34363b;
+  --alert: #f07a72; --alert-bg: #3a2120; --todo: #a89cf5; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.75; }
+.wrap { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 80px; }
+h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 800; letter-spacing: .01em; margin: 0 0 8px; text-wrap: balance; }
+h2 { font-size: 21px; font-weight: 800; margin: 0 0 4px; text-wrap: balance; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+h2 .tag { font-family: var(--font-mono); font-size: 13px; color: var(--muted); letter-spacing: .08em; }
+p { margin: 0; max-width: 68ch; }
+.lede { color: var(--muted); }
+.meta { font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin-top: 12px; letter-spacing: .03em; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 20px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 22px; height: 12px; border: 2px solid var(--fg); border-radius: 3px; display: inline-block; }
+.sw.alert { border-color: var(--alert); border-width: 3px; }
+.sw.todo { border-color: var(--todo); border-style: dashed; }
+section { margin-top: 56px; display: grid; gap: 16px; }
+.diagram { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
+.diagram pre.mermaid { margin: 0; min-width: 640px; text-align: center; background: transparent; }
+.diagram pre.card { margin: 0; font-family: var(--font-mono); font-size: 13px; line-height: 1.7; white-space: pre; color: var(--fg); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tbl { overflow-x: auto; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .06em; }
+td.id { font-family: var(--font-mono); font-size: 13px; white-space: nowrap; font-weight: 500; }
+tr.alert td { background: var(--alert-bg); }
+tr.alert td.id { color: var(--alert); }
+.where { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.problems { display: grid; gap: 12px; }
+.problem { border-left: 3px solid var(--alert); padding: 4px 0 4px 16px; display: grid; gap: 4px; }
+.problem b { font-family: var(--font-mono); color: var(--alert); margin-right: 6px; }
+.problem .ev { color: var(--muted); font-size: 14px; }
+.note { font-size: 13px; color: var(--muted); }
+</style>
+
+<div class="wrap">
+  <h1>exobrain 記憶の流れ</h1>
+  <p class="lede">記憶が「入ってくる → 脳に書かれる → AI に読まれる → 書き直されて育つ」までを、いま動いている仕組みのとおりに描いたものです。問題が起きている箇所には印を付けました。話し合うときは、各段の番号（I1・W2・R2 など）で指してください。</p>
+  <p class="meta">いまの仕組み = コード 259bd7f 時点（仕様 v0.6 ＋ v0.7 で実装済みの部分）</p>
+  <div class="legend">
+    <span><i class="sw"></i>いま動いている段</span>
+    <span><i class="sw alert"></i>問題が起きている段（P1〜P5）</span>
+    <span><i class="sw todo"></i>まだない（仕様 v0.7 で予定）</span>
+  </div>
+
+  <section id="intake">
+    <h2>1. 取り込む <span class="tag">I · INTAKE</span></h2>
+    <p>どの AI の会話も、どのメモも、まず「預かりBOX」に入ります。ここではまだ脳に入っていません。原文は本棚に保管され、二度と変わりません。</p>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  c1["I1 Codex・Claude Code・Cowork の会話<br/>Mac の中の記録"] -->|"毎晩 AI が要約"| d1["AI日報<br/>1スレッド・1日1枚"]
+  c2["I2 Claude Desktop のチャット"] -->|"/日報・/預けて"| d2["日報・預け入れ"]
+  c3["I3 ChatGPT・Gemini"] -->|"Markdown をダウンロード"| dl["~/Downloads を見張る"]
+  c4["I4 Obsidian の #remember メモ"] -->|"1日2回の見回り・プラグイン"| box
+  c5["I5 exobrain memo・受け取り箱"] --> box
+  d1 --> box["預かりBOX"]
+  d2 --> box
+  dl --> box
+  d1 -.->|"元の会話の抜粋"| shelf
+  box -->|"I6 符号化（AI なし）"| shelf["本棚 / 原文<br/>変えない・ずっと残る"]
+  box --> idx["検索の索引<br/>800字ずつ・意味の近さ"]
+  box --> hip["海馬<br/>昇格待ち・7日で消える"]
+</pre>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>段</th><th>何が起きるか</th><th>決めているのは</th></tr></thead>
+      <tbody>
+        <tr><td class="id">I1</td><td>Mac の中にある Codex・Claude Code・Cowork の会話を毎晩読み、前回からの差分を AI が日報にまとめる。元の会話の抜粋も本棚に残す</td><td>AI（Claude Code）</td></tr>
+        <tr><td class="id">I2</td><td>Claude Desktop では、あなたが <code>/日報</code> か <code>/預けて</code> と送ったときだけ、その場の AI がまとめて送る</td><td>あなたの合図 ＋ AI</td></tr>
+        <tr><td class="id">I3</td><td>ChatGPT・Gemini は日報の Markdown をダウンロードしてもらい、それを拾う</td><td>あなたの操作</td></tr>
+        <tr><td class="id">I4–I5</td><td>Obsidian の <code>#remember</code> 付きメモ、<code>exobrain memo</code>、受け取り箱のファイルをそのまま受け取る</td><td>あなた</td></tr>
+        <tr><td class="id">I6</td><td>原文を本棚に保存し、検索用の索引を作り、海馬に「昇格待ち」として入れる。AI は使わない</td><td>プログラム</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="write">
+    <h2>2. 脳に書き込む <span class="tag">W · WRITE</span></h2>
+    <p>海馬の資料のうち、合図があるものだけが睡眠中に「記憶の原子」に分けられ、大脳皮質に入ります。会話中に明示されたものは、睡眠を待たずに入ります。</p>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  hip["海馬の資料"] --> sig{"W1 昇格の合図は？"}
+  sig -->|"明示: メモ・預け入れ・日報の<br/>決まったこと／注意／こだわり"| ai
+  sig -->|"反復: 別の日・別の資料に似た話"| ai
+  sig -->|"合図なし"| stay["本棚に残るだけ"]
+  ai["W2 Claude Code が原子に分ける<br/>1資料あたり5〜8個まで"] --> chk["W3 原文の行を切り出して照合"]
+  chk --> dup{"W4 似た記憶と同じ？"}
+  dup -->|"同じ"| ev["既存の記憶に根拠を足す"]
+  dup -->|"新しい"| node["大脳皮質の記憶<br/>ルール / 知識 / 出来事 ＋ 話題"]
+  im["W5 即時レーン（会話中）<br/>覚えておいて・前にも言った・/good"] --> node
+  classDef alert stroke:#d64545,stroke-width:3px
+  class sig,ai,dup alert
+</pre>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>段</th><th>何が起きるか</th><th>決めているのは</th></tr></thead>
+      <tbody>
+        <tr class="alert"><td class="id">W1 · P1</td><td>合図があるものだけを候補にする。ただし預け入れや日報の欄まで「明示（あなたが言った）」に数えている</td><td>プログラム <span class="where">promote.py EXPLICIT_KINDS</span></td></tr>
+        <tr class="alert"><td class="id">W2 · P2</td><td>AI が原文を 1 文ずつの原子にする。一度の判断がそのまま「ルール」になり、どの案件の話かも持たない</td><td>AI（Claude Code）</td></tr>
+        <tr><td class="id">W3</td><td>引用は AI に書かせず、プログラムが原文から切り出して一致を確かめる。どの記憶からも原文に戻れるのはこのため</td><td>プログラム</td></tr>
+        <tr class="alert"><td class="id">W4 · P3</td><td>似た記憶があれば根拠を足すだけにする。別の日の同じ出来事がすり抜けて 2 件になった</td><td>AI ＋ 意味の近さ 0.80</td></tr>
+        <tr><td class="id">W5</td><td>会話中の「覚えておいて」「前にも言った」「/good」は、睡眠を待たずに入る</td><td>あなたの合図</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="read">
+    <h2>3. AI が読み込む <span class="tag">R · READ</span></h2>
+    <p>会話中の AI が記憶を読むのは、あなたが <code>/思い出して</code> と送ったときだけです。大脳皮質から順に探し、見つからなければ「記録はない」と答えます。</p>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  owner["あなたが /思い出して"] --> chat["会話中の AI<br/>Claude Desktop・Codex など"]
+  chat -->|"R1 start_session"| prof["強いルール・知識の要約<br/>500トークン"]
+  chat -->|"R2 recall（いまの話題）"| cx["大脳皮質<br/>意味・文字・つながり3段"]
+  cx -->|"足りなければ"| hp["海馬"]
+  hp --> bs["本棚・Obsidian"]
+  bs --> none["記録はない、と答える"]
+  cx --> pack["1500トークンに詰める<br/>ルール枠30%・ひらめき枠15%"]
+  fill["R3 話題に関係なく<br/>強いルールで埋める"] --> pack
+  me["あなたが exobrain ask / look"] --> agent["R4 記憶係（読むだけ）"]
+  classDef alert stroke:#d64545,stroke-width:3px
+  class prof,fill alert
+</pre>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>段</th><th>何が起きるか</th><th>決めているのは</th></tr></thead>
+      <tbody>
+        <tr class="alert"><td class="id">R1 · P4</td><td>強いルールと知識を、案件に関係なく強い順に並べて渡す</td><td>プログラム <span class="where">brain.py profile</span></td></tr>
+        <tr><td class="id">R2</td><td>いまの話題に近い記憶を探し、つながりを 3 段までたどって集める。大脳皮質で足りなければ海馬、本棚の順に探す</td><td>プログラム</td></tr>
+        <tr class="alert"><td class="id">R3 · P4</td><td>話題が少ししか当たらないとき、ルール枠の残りを「全体で強いルール」で埋める。ハピホテの体言止めが別の仕事の会話にも出てくるのはここ</td><td>プログラム <span class="where">recall.py standing_rules</span></td></tr>
+        <tr><td class="id">R4</td><td>あなたがターミナルで脳の中を確かめる入口。読むだけで、記憶は変わらない</td><td>あなた ＋ AI（記憶係）</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="grow">
+    <h2>4. 書き直して育てる <span class="tag">G · GROW</span></h2>
+    <p>使うほど強まり、注意されると直り、毎晩の睡眠で整理されます。ただし「なぜ」から理解し直す段は、まだありません。</p>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart TB
+  use["会話で一緒に思い出した・使った"] -->|"G1 少し強まる"| brain["大脳皮質"]
+  good["/good"] -->|"G2 強く強まる・やり方を記憶"| brain
+  corr["前にも言った"] -->|"G3 強める・戻す・新しく覚える<br/>3回目で守るルールに"| brain
+  rev["G4 根拠つきの書き換え<br/>前の中身は履歴に残る"] --> brain
+  night["毎晩3時の睡眠"] --> s1["G5 よく一緒に出た記憶をつなぐ<br/>90日使わないと休眠"]
+  night --> s2["G6 海馬から7日で消す<br/>原文は本棚に残る"]
+  night --> s3["G7 写し・目次・夢日記・バックアップ"]
+  s1 --> brain
+  todo1["G8 判断を事例に（状況・判断・理由・反応・時期）"] -.-> brain
+  todo2["G9 事例に共通する理由から傾向を作る"] -.-> brain
+  todo3["G10 案件か全体かの区別・忘れて覚え直す"] -.-> brain
+  classDef todo stroke:#7b6be0,stroke-width:2px,stroke-dasharray:5 4
+  class todo1,todo2,todo3 todo
+</pre>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>段</th><th>何が起きるか</th><th>状態</th></tr></thead>
+      <tbody>
+        <tr><td class="id">G1–G3</td><td>使った・褒められた・注意されたことで、記憶とつながりの強さが変わる</td><td>動いている</td></tr>
+        <tr><td class="id">G4</td><td>思い出した記憶が古いと分かったとき、あなたの言葉か原文を根拠に書き換える</td><td>動いている</td></tr>
+        <tr><td class="id">G5–G7</td><td>睡眠中に、つながりの候補を作り、使わない記憶を休ませ、海馬を片付け、本棚の目次を作り直す</td><td>動いている</td></tr>
+        <tr class="alert"><td class="id">G8 · P5</td><td>判断をルールではなく事例として持ち、似た場面で理由から考え直す</td><td>まだない（仕様 9.6）</td></tr>
+        <tr class="alert"><td class="id">G9 · P5</td><td>複数の事例に共通する「なぜ」から、あなたの傾向を作る。答え合わせで確定・訂正する</td><td>まだない（仕様 9.2）</td></tr>
+        <tr><td class="id">G10</td><td>案件の話と全体の話を分ける。使わない記憶は忘れ、本棚から覚え直す</td><td>まだない（仕様 9.1・4章）</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="problems">
+    <h2>5. いま起きている問題 <span class="tag">P1–P5</span></h2>
+    <div class="problems">
+      <div class="problem"><p><b>P1</b>「明示」が多すぎる（W1）</p><p class="ev">110件中91件が「あなたが明示した」扱い。実際には AI がまとめた預け入れや日報の欄が多く、本当に強い合図が埋もれている。</p></div>
+      <div class="problem"><p><b>P2</b>一度の判断がルールになる（W2）</p><p class="ev">「ハピホテの見出しは体言止め」がずっと守るルールとして残った。理由も、どの案件の話かも持っていない。</p></div>
+      <div class="problem"><p><b>P3</b>同じ出来事が 2 件ある（W4）</p><p class="ev">NG ワードの指摘が、2 回目に別の記憶として入った。記憶係が「よく怒られている」という像に歪むと指摘している。</p></div>
+      <div class="problem"><p><b>P4</b>案件の話が別の仕事にも出てくる（R1・R3）</p><p class="ev">ルールを、いまの話題と関係なく「全体で強い順」に渡しているため。</p></div>
+      <div class="problem"><p><b>P5</b>表面の行動で人物像を作る（G8・G9 がない）</p><p class="ev">記憶係の人物像は筋がずれていた。本当の筋は「手戻りと無駄を避けたい。だから先に確認し、順番を決めてから動く」（2026-10-01 の答え合わせ）。</p></div>
+    </div>
+  </section>
+
+  <section id="next">
+    <h2>6. これからの形 <span class="tag">2026-10-04 の方針</span></h2>
+    <p>取り込みは今の流れのまま、書式をそろえます。脳は「小さな粒をたくさんのリンクでつなぐ」形にし、睡眠中の書き換えを中心の仕組みにします。</p>
+  </section>
+
+  <section id="card">
+    <h2>6-1. 共通の書式 <span class="tag">I6 で全部そろえる</span></h2>
+    <p>どこから来た資料も、預かりBOX に入る時点で同じ書式の「記録カード」にそろえます。人が Obsidian で読む前提で書き、AI もこの見出しを手がかりに読みます。原文は、カードの下にそのまま付けます。</p>
+    <div class="diagram"><pre class="card">---
+種類: AI日報            # AI日報 / 預け入れ / メモ / 取材 / クライアント
+日付: 2026-09-29
+書き手: Codex
+スレッド: ハピホテ LP の見出し
+案件: "[[ハピホテ]]"
+話題: ["[[見出し]]", "[[体言止め]]"]
+tags: [exobrain/記録]
+---
+# 2026-09-29 · Codex · ハピホテ LP の見出し
+
+## 要約
+（3行まで。何の話で、どうなったか）
+
+## あったこと
+- …
+
+## 判断と理由          ← 事例のもとになる欄
+- 判断: 見出しを体言止めにした
+  - 理由: 一覧で流し読みされるので、短く言い切って目を止めたい
+  - 場面: ホテル利用者向けの LP、一覧表示
+
+## オーナーの言葉
+&gt; （言い換えずにそのまま）
+
+## 未解決・次に続くこと
+- …
+
+---
+（ここから下は原文のまま）</pre></div>
+    <p class="note">「判断と理由」の例は説明用です。Obsidian 向けのスキルを受け取ったら、書式はそれに合わせて直します。</p>
+  </section>
+
+  <section id="particles">
+    <h2>6-2. 小さな粒と、たくさんのリンク <span class="tag">W2・W4 を作り直す</span></h2>
+    <p>粒は「ハピホテ」「見出し」「体言止め」「流し読み」のような短い言葉にします。粒どうしをつなぐリンクに、「どんな場面で・なぜ」と、根拠になった出来事（エピソード）を付けます。1回の会話がルールになるのではなく、リンクが出来事のたびに強まったり、条件が付いたり、置き換わったりします。</p>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  midashi(("見出し"))
+  taigen(("体言止め"))
+  yoin(("言い切らない"))
+  nagare(("流し読みされる"))
+  yomimono(("じっくり読まれる"))
+  hapi(("ハピホテ"))
+  e1["出来事 9/29<br/>ハピホテ LP の見出し"]
+  e2["出来事 10/12<br/>別案件の読み物"]
+  midashi ===|"合う ・ 強さ 0.6<br/>場面: 流し読み"| taigen
+  midashi ---|"合う ・ 強さ 0.4<br/>場面: 読み物"| yoin
+  taigen -.-|"理由"| nagare
+  yoin -.-|"理由"| yomimono
+  e1 -->|"根拠"| taigen
+  e1 -->|"案件"| hapi
+  e2 -->|"根拠"| yoin
+</pre>
+    </div>
+    <p class="note">10/12 の出来事は、仕組みを説明するための架空の例です。こう持てば「ハピホテの見出しは体言止め」というルールは生まれず、「流し読みされる見出しなら言い切る」という理由のついたつながりが残ります。ハピホテは、出来事の側にだけ付きます。</p>
+  </section>
+
+  <section id="sleep">
+    <h2>6-3. 睡眠中の書き換え <span class="tag">いちばんの課題</span></h2>
+    <p>その日に海馬へ入った出来事を、毎晩、今あるリンクと 1 つずつ突き合わせます。同じなら強め、条件が違えば分け、新しい判断が古い判断とぶつかれば置き換えます。置き換えた古いつながりは「以前はこうだった」として履歴に残ります。</p>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart TB
+  ep["今日の出来事（海馬）"] --> split["S1 小さな粒とリンクの候補に分ける<br/>粒・場面・判断・理由・根拠の行"]
+  split --> find["S2 同じ粒どうしの、今あるリンクを探す<br/>別名も同じ粒として扱う"]
+  find --> judge{"S3 判断役が比べる"}
+  judge -->|"同じ"| up["強める<br/>出来事を根拠に足す"]
+  judge -->|"場面が違う"| cond["リンクを場面ごとに分ける"]
+  judge -->|"ぶつかる"| swap["新しいほうを優先<br/>古いほうは「以前は」として弱める"]
+  judge -->|"初めて"| make["新しいリンクを作る（弱く始める）"]
+  up --> after["S4 全体を少し縮め、弱いリンクを外す<br/>外したものは本棚から覚え直せる"]
+  cond --> after
+  swap --> after
+  make --> after
+  after --> port["S5 強い「理由」から、オーナー像を書き直す"]
+  port --> diary["S6 夢日記に、変えたことを全部書く<br/>あなたは「違う」と言える"]
+  classDef todo stroke:#7b6be0,stroke-width:2px,stroke-dasharray:5 4
+  class split,find,judge,up,cond,swap,make,after,port todo
+</pre>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>段</th><th>何をするか</th><th>決めるのは</th></tr></thead>
+      <tbody>
+        <tr><td class="id">S1</td><td>出来事を、粒（言葉）と、粒どうしの関係（場面・判断・理由つき）に分ける。根拠の行を原文から切り出す</td><td>AI（Claude Code）＋ プログラムの照合</td></tr>
+        <tr><td class="id">S2</td><td>同じ粒どうしにすでにあるリンクを集める。「A社様」と「A社」のような別名は同じ粒として扱う</td><td>プログラム</td></tr>
+        <tr><td class="id">S3</td><td>新しい候補と今あるリンクを比べ、「同じ・場面が違う・ぶつかる・初めて」のどれかに決める</td><td>判断役（Kev・Jev、迷えば Claude）</td></tr>
+        <tr><td class="id">S4</td><td>全体の強さを少しずつ縮め、弱くなったリンクを外す</td><td>プログラム</td></tr>
+        <tr><td class="id">S5</td><td>複数の出来事にまたがって強い「理由」から、オーナー像を書き直す</td><td>AI ＋ あなたの答え合わせ</td></tr>
+        <tr><td class="id">S6</td><td>何を強め、分け、置き換え、外したかを夢日記に残す</td><td>プログラム</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">Figma や Miro で同じ図を編集したい場合は、claude.ai で Figma か Miro のコネクタをつなげば、そちらにも書き出せます。</p>
+  </section>
+</div>
