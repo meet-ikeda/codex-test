@@ -94,3 +94,23 @@ def test_project_note_gathers_every_log_of_a_project(brain, settings, session):
     assert "ヒミツキチ" in call("open_project", {"name": "ハピホテ"})["note"]
     missing = call("open_project", {"name": "存在しない案件"})
     assert missing["found"] is False and "ハピホテ" in missing["projects"]
+
+
+def test_only_projects_make_project_notes(brain, settings, session):
+    from exobrain.shelves import project_logs
+
+    brain._concept_id("test", "見出し")                                    # an ordinary topic
+    brain._concept_id("test", "ハピホテ", {"type": "project", "aliases": ["ハピホテル"]})
+    brain.submit_daily_log(session, "見出しの相談", [], [], [], ["短くする"], [], project="なし", thread_id="a")
+    for title, tid in (("見出しの言い切り", "b"), ("ハピホテル LP の見出し", "c")):
+        brain.submit_daily_log(session, title, [], [], [], ["言い切る"], [], thread_id=tid)
+    # make those two look like logs written before v2, which carry no 案件
+    for sid, body in brain._conn.execute("SELECT source_id, body FROM source_fts").fetchall():
+        if "見出しの言い切り" in body or "ハピホテル LP" in body:
+            old = "\n".join(line for line in body.splitlines() if not line.startswith("案件:"))
+            brain._conn.execute("UPDATE source_fts SET body = ? WHERE source_id = ?", (old, sid))
+    groups = project_logs(brain)
+    assert list(groups) == ["ハピホテ"] and len(groups["ハピホテ"]) == 1  # found by its other name in the title
+
+    from exobrain.shelves import project_note_text
+    assert project_note_text(brain, "ハピホテの続き") is not None

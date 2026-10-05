@@ -333,25 +333,48 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
-def project_of(source: Source, known: list[str]) -> str | None:
-    """The project a log belongs to: its 案件 property (log v2), else a known project or topic in its title."""
+def _declared_project(source: Source) -> str | None:
+    """The 案件 property of a log v2: a name, "なし" (no project), or None when the log does not say."""
     from .daily import PROJECT_KEY, front_matter
 
     value = str(front_matter(source.body).get(PROJECT_KEY) or "").strip()
-    if value and value != "なし":
-        return value.removeprefix("[[").removesuffix("]]").split("|", 1)[0].strip() or None
+    if not value:
+        return None
+    return value.removeprefix("[[").removesuffix("]]").split("|", 1)[0].strip() or None
+
+
+def project_of(source: Source, known: dict[str, str]) -> str | None:
+    """The project a log belongs to: its 案件 property (log v2), else a known project's name or other name
+    in its title (older logs). A log that says 案件: なし belongs to none. `known` maps names to projects."""
+    declared = _declared_project(source)
+    if declared:
+        return None if declared == "なし" else declared
     hits = [name for name in known if name and name in source.title]
-    return max(hits, key=len) if hits else None
+    return known[max(hits, key=len)] if hits else None
 
 
-def _known_projects(brain: Brain) -> list[str]:
-    return [r[0] for r in brain._conn.execute(
-        "SELECT label FROM nodes WHERE kind = 'concept' AND status != 'erased' AND length(label) >= 2")]
+def _known_projects(brain: Brain, sources: list[Source]) -> dict[str, str]:
+    """Projects only: the names logs give as 案件, and the topics typed as a project, with their other names.
+    Other topics (見出し, 睡眠…) in a title do not make a project."""
+    known: dict[str, str] = {}
+    for s in sources:
+        name = _declared_project(s) if s.kind in LOG_KINDS else None
+        if name and name != "なし":
+            known[name] = name
+    rows = brain._conn.execute(
+        "SELECT n.label, a.alias FROM nodes n LEFT JOIN concept_aliases a ON a.concept_id = n.id"
+        " WHERE n.kind = 'concept' AND n.concept_type = 'project' AND n.status != 'erased'").fetchall()
+    for label, alias in rows:
+        known.setdefault(label, label)
+    for label, alias in rows:
+        if alias and len(alias) >= 2:
+            known.setdefault(alias, label)
+    return {n: p for n, p in known.items() if len(n) >= 2}
 
 
 def project_logs(brain: Brain, sources: list[Source] | None = None) -> dict[str, list[Source]]:
     sources = _load_sources(brain) if sources is None else sources
-    known = _known_projects(brain)
+    known = _known_projects(brain, sources)
     groups: dict[str, list[Source]] = defaultdict(list)
     for s in sources:
         if s.kind in LOG_KINDS:
@@ -407,7 +430,9 @@ def project_note(w: _Writer, name: str, logs: list[Source], at: str | None = Non
 def project_note_text(brain: Brain, name: str) -> str | None:
     """For the AIs: a project's note, found by its name or a name close to it."""
     groups = project_logs(brain)
-    hit = name if name in groups else next((n for n in groups if name and (name in n or n in name)), None)
+    # "ハピホテ" or "ハピホテの続き": the exact name first, else the longest project name that fits.
+    close = [n for n in groups if name and (name in n or n in name)]
+    hit = name if name in groups else (max(close, key=len) if close else None)
     if hit is None:
         return None
     return project_note(_Writer(brain), hit, groups[hit])
