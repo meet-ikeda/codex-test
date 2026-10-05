@@ -526,11 +526,36 @@ class _Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def code_stamp() -> float:
+    """When exobrain's own files last changed (an upgrade rewrites them)."""
+    return max((f.stat().st_mtime for f in Path(__file__).parent.rglob("*.py")), default=0.0)
+
+
+def watch_for_upgrade(stop: threading.Event, on_upgrade, interval: float = 60.0, stamp=code_stamp) -> None:
+    """The resident screen lives for days. Without this, an upgraded exobrain keeps running the old
+    code there (its sleep button and bookshelf indexes included) until the Mac restarts."""
+    first = stamp()
+    while not stop.wait(interval):
+        if stamp() != first:
+            on_upgrade()
+            return
+
+
+def _restart_for_upgrade() -> None:
+    import os
+    import sys
+
+    print("exobrain: 新しい版が入ったので、画面を起動し直します。", file=sys.stderr, flush=True)
+    os._exit(75)  # launchd (KeepAlive) starts the new version
+
+
 def serve(brain: Brain, port: int = DEFAULT_PORT, open_browser: bool = True) -> None:
     app = App(brain)
     server = _Server(("127.0.0.1", port), make_handler(app, port))
     url = f"http://127.0.0.1:{port}/"
     threading.Thread(target=app.poll_inbox, daemon=True).start()
+    if not open_browser:  # the resident form started by launchd, which restarts it
+        threading.Thread(target=watch_for_upgrade, args=(app._stop, _restart_for_upgrade), daemon=True).start()
     print(f"exobrain: {url}  （終了は Ctrl+C）")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()

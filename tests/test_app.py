@@ -143,3 +143,15 @@ def test_timer_is_saved(served):
     assert request(port, "POST", "/api/sleep/timer", {"hour": 25}, app.token)[0] == 400
     _, s = request(port, "GET", "/api/sleep", token=app.token)
     assert s["timer"] == {"hour": 3, "minute": 5}
+
+
+def test_resident_screen_restarts_after_an_upgrade():
+    import threading
+
+    from exobrain.app import watch_for_upgrade
+
+    stamps = iter([1.0, 1.0, 2.0])
+    fired = threading.Event()
+    stop = threading.Event()
+    watch_for_upgrade(stop, fired.set, interval=0.01, stamp=lambda: next(stamps))
+    assert fired.is_set()
