@@ -68,3 +68,29 @@ def test_rebuilt_every_sleep_and_old_shelves_removed(brain, settings, session):
     write_shelf_index(brain)
     assert not (topics / "消えた話題.md").exists()
     assert (topics / "手で置いた.md").read_text(encoding="utf-8") == "オーナーのノート"  # a person's file is never removed
+
+
+def test_project_note_gathers_every_log_of_a_project(brain, settings, session):
+    import asyncio
+    from exobrain.mcp_server import build_server
+
+    more = {"status": ["○○GO の方向で、候補を商標で絞った"], "rejected": ["ヒミツキチ（理由: ジャンプが足りない）"],
+            "conditions": ["「ホテ」と親会社の名前は出さない"]}
+    for _ in range(2):  # two AI writers file the same meeting: the note says it once
+        brain.submit_daily_log(session, "ネーミング", [], [], [], ["はしゃGO のタグラインは「日常を抜け出そう。」"], ["弁理士に確認する"],
+                               project="[[ハピホテ]]", more=more, thread_id=f"t-{_}")
+    brain.add_memo("社外秘", "#機密\n\n案件: [[ハピホテ]]\n")
+    names = write_shelf_index(brain)
+    assert "案件/ハピホテ.md" in names
+    note = (settings.bookshelf / "案件" / "ハピホテ.md").read_text(encoding="utf-8")
+    for section, text in (("今の状況", "○○GO の方向"), ("前提・条件", "「ホテ」と親会社"), ("決まったこと", "日常を抜け出そう"),
+                          ("ボツになったこと", "ヒミツキチ"), ("次にやること", "弁理士")):
+        assert f"## {section}" in note and text in note
+    assert note.count("ヒミツキチ") == 1 and "## 日報" in note
+
+    server = build_server(brain)
+    def call(name, args):
+        return asyncio.run(server.call_tool(name, args)).structured_content
+    assert "ヒミツキチ" in call("open_project", {"name": "ハピホテ"})["note"]
+    missing = call("open_project", {"name": "存在しない案件"})
+    assert missing["found"] is False and "ハピホテ" in missing["projects"]

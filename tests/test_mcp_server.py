@@ -18,7 +18,7 @@ def server(brain):
 
 def test_tool_list_has_nothing_destructive(server):
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert set(tools) == {"start_session", "recall", "remember_explicit", "submit_daily_log", "deposit", "good", "revise_memory", "open_source",
+    assert set(tools) == {"start_session", "recall", "remember_explicit", "submit_daily_log", "deposit", "good", "revise_memory", "open_project", "open_source",
                           "trace_correction", "apply_correction"}
     assert not any(w in name for name in tools for w in ("erase", "delete", "pause", "restore"))
     # The AI no longer writes to the cortex on its own judgment (spec v0.5 §1).
@@ -55,7 +55,7 @@ def test_daily_log_goes_to_the_hippocampus_not_the_cortex(server, brain):
     h = brain._conn.execute("SELECT status FROM hippocampus WHERE source_id = ?", (r["source_id"],)).fetchone()
     assert h["status"] == "waiting"
     body = call(server, "open_source", {"source_id": r["source_id"]})["body"]
-    assert "outbrain_kind: ai_daily" in body and "- 大脳皮質の md は写し" in body and "## 工夫・学び\n\n- 特になし" in body
+    assert "outbrain_kind: ai_daily" in body and "- 大脳皮質の md は写し" in body and "## ボツになったこと\n\n- 特になし" in body
     # The second /日報 continues the first one's cursor.
     r2 = call(server, "submit_daily_log", {"session_id": sid, "thread_title": "exobrain の相談",
                                            "events": ["評価質問を固定した"]})

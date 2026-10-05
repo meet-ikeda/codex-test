@@ -27,7 +27,8 @@ if TYPE_CHECKING:
     from .brain import Brain
 
 EXPLICIT_KINDS = ("remember_note", "memo", "deposit")  # the owner handed these over on purpose
-DAILY_EXPLICIT_SECTIONS = ("決まったこと", "注意・訂正されたこと", "オーナーのこだわり・理由")
+DAILY_EXPLICIT_SECTIONS = ("決まったこと", "注意・訂正されたこと", "オーナーのこだわり・理由",  # log v1
+                           "ボツになったこと", "前提・条件", "オーナーの言葉")  # log v2 (docs/daily-log-rules.md)
 ATOMS_PER_SEGMENT = 5
 ATOMS_PER_OWNER_SEGMENT = 8  # the owner's own notes are dense and were marked on purpose (2026-09-27)
 SIMILAR_SHOWN = 8

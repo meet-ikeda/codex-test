@@ -787,7 +787,8 @@ class Brain:
     def submit_daily_log(self, session_id: str, thread_title: str, events_: list[str], corrections: list[str],
                          learnings: list[str], decisions: list[str], unresolved: list[str],
                          ai_model: str = "unknown", thread_id: str | None = None,
-                         reasons: list[str] | None = None) -> dict[str, Any]:
+                         reasons: list[str] | None = None, project: str = "",
+                         more: dict[str, list[str]] | None = None) -> dict[str, Any]:
         """`/日報`: the AI writes what is new in this conversation since its last log (protocol v1).
         The log goes to the receiving box and the hippocampus; nothing is written to the cortex."""
         import hashlib
@@ -812,13 +813,14 @@ class Brain:
         last = self._conn.execute("SELECT at FROM ai_checkpoints WHERE key = ?", (key,)).fetchone()
         period_start = datetime.fromisoformat(last[0] if last else started).astimezone()
         sections = {"events": events_, "corrections": corrections, "learnings": learnings,
-                    "decisions": decisions, "reasons": reasons or [], "unresolved": unresolved}
+                    "decisions": decisions, "reasons": reasons or [], "unresolved": unresolved,
+                    **{k: list(v or []) for k, v in (more or {}).items()}}
         digest = hashlib.sha256(events.canonical_json([key, prev, sections]).encode()).hexdigest()
         fields.update(entry_date=f"{now:%Y-%m-%d}", period_start=period_start.isoformat(timespec="seconds"),
                       period_end=now.isoformat(timespec="seconds"), generated_at=now.isoformat(timespec="seconds"),
                       previous_cursor=prev or "", cursor=digest)
         try:
-            text = daily.render(fields, thread_title.strip() or "無題のスレッド", sections)
+            text = daily.render(fields, thread_title.strip() or "無題のスレッド", sections, project)
             result = file_daily(self, text, actor=f"ai:{ai_name}")
         except daily.DailyRejected as e:
             raise InvalidInput(str(e)) from None

@@ -17,14 +17,55 @@ from typing import Any
 
 REQUIRED = ("source", "ai_provider", "ai_product", "ai_model", "thread_id", "entry_date",
             "period_start", "period_end", "generated_at", "cursor")
+# Log format v2 (docs/daily-log-rules.md, 2026-10-05). Keys stay where they meant the same thing.
 SECTIONS = (
-    ("events", "今日の出来事"),
-    ("corrections", "注意・訂正されたこと"),
-    ("learnings", "工夫・学び"),
+    ("status", "今の状況"),
     ("decisions", "決まったこと"),
-    ("reasons", "オーナーのこだわり・理由"),  # the why, in the owner's words (2026-09-29)
-    ("unresolved", "未解決・次に続くこと"),
+    ("rejected", "ボツになったこと"),
+    ("conditions", "前提・条件"),
+    ("reasons", "オーナーの言葉"),  # only what the owner said as a reason or a preference, word for word
+    ("events", "あったこと"),        # what happened, reactions included
+    ("unresolved", "次にやること"),
+    ("ai_notes", "AIの解釈"),        # the AI's own reading, never mixed with the owner's
 )
+# v1 keys still accepted from older callers: folded into the v2 sections.
+V1_KEYS = {"corrections": "conditions", "learnings": "ai_notes"}  # a correction is a condition from now on
+# Headings of both versions, for readers of logs already on the bookshelf.
+HEADINGS = {
+    "status": ("今の状況",),
+    "decisions": ("決まったこと",),
+    "rejected": ("ボツになったこと",),
+    "conditions": ("前提・条件",),
+    "reasons": ("オーナーの言葉", "オーナーのこだわり・理由"),
+    "events": ("あったこと", "今日の出来事", "注意・訂正されたこと"),
+    "unresolved": ("次にやること", "未解決・次に続くこと"),
+    "ai_notes": ("AIの解釈", "工夫・学び"),
+}
+PROJECT_KEY = "案件"
+
+
+def fold_v1(sections: dict[str, list[str]]) -> dict[str, list[str]]:
+    out = {k: list(v or []) for k, v in sections.items() if k not in V1_KEYS}
+    for old, new in V1_KEYS.items():
+        out.setdefault(new, []).extend(sections.get(old) or [])
+    return out
+
+
+def section_items(body: str, key: str) -> list[str]:
+    """Bullet items under one section of a log (v1 or v2 headings)."""
+    names = HEADINGS[key]
+    items, inside = [], False
+    for line in body.splitlines():
+        if line.startswith("## "):
+            inside = line[3:].strip() in names
+            continue
+        if inside and line.lstrip().startswith(("- ", "* ")):
+            text = line.lstrip()[2:].strip()
+            if text and text not in ("特になし", "なし", "（なし）"):
+                items.append(text)
+    return items
+
+
 _FRONT = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
 _KEY = re.compile(r"^([^\s:#\-][^:]*?):\s*(.*)$")  # Japanese keys too (the plugin's receipt: exobrain受領)
 _TITLE = re.compile(r"^#\s+AI日報\s*·\s*(.+?)\s*·\s*\d{4}-\d{2}-\d{2}\s*$", re.M)
@@ -115,8 +156,8 @@ def _yaml(value: str) -> str:
     return json.dumps("" if value is None else str(value), ensure_ascii=False)
 
 
-def render(fields: dict[str, str], thread_title: str, sections: dict[str, list[str]]) -> str:
-    """Write a log in protocol v1 (same bytes as OUTBRAIN's renderDailyNote)."""
+def render(fields: dict[str, str], thread_title: str, sections: dict[str, list[str]], project: str = "") -> str:
+    """Write a log: protocol v1's header (so cursors keep working), v2's sections (docs/daily-log-rules.md)."""
     missing = [k for k in REQUIRED if not fields.get(k)]
     if missing:
         raise DailyRejected(f"AI 日報に必要な項目がありません: {', '.join(missing)}")
@@ -128,9 +169,14 @@ def render(fields: dict[str, str], thread_title: str, sections: dict[str, list[s
         head.append(f"outbrain_{k}: {_yaml(fields[k])}")
     head.append(f"outbrain_previous_cursor: {_yaml(fields.get('previous_cursor') or '')}")
     head.append(f"outbrain_cursor: {_yaml(fields['cursor'])}")
+    project = " ".join(str(project or "").split()).strip("[]") or "なし"
+    head.append(f"{PROJECT_KEY}: {_yaml('[[' + project + ']]' if project != 'なし' else 'なし')}")
     head += ["tags: [remember, outbrain/ai-daily]", "---", "", f"# AI日報 · {thread_title} · {fields['entry_date']}", ""]
     body = []
+    sections = fold_v1(sections)
     for key, heading in SECTIONS:
+        if key == "ai_notes" and not sections.get(key):
+            continue
         body += [f"## {heading}", "", _bullets(sections.get(key)), ""]
     return "\n".join(head + body) + "#remember\n"
 

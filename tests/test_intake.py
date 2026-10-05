@@ -52,7 +52,7 @@ def test_protocol_v1_round_trip_matches_outbrain_format():
     text = log("c1", decisions=["md は写し"])
     meta = daily.parse(text)
     assert meta.key == "codex:t-1" and meta.thread_title == "OUTBRAIN開発" and meta.fields["ai_model"] == "gpt-6"
-    assert "## 工夫・学び\n\n- 特になし" in text and text.endswith("#remember\n")
+    assert "## 決まったこと\n\n- md は写し" in text and "## ボツになったこと\n\n- 特になし" in text and text.endswith("#remember\n")
     assert daily.filename({**FIELDS, "cursor": "c1"}, "OUTBRAIN開発").startswith("2026-09-24__codex__OUTBRAIN開発__")
 
 

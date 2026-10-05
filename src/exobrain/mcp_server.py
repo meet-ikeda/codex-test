@@ -25,12 +25,16 @@ exobrain は、利用者（オーナー）の外部脳です。どの AI・ど�
      その会話では以後、話題が変わったら recall を呼んでよい。
    - recall は大脳皮質 → 海馬 → 本棚 → Obsidian の順に探す。記録から答えるときは、日時・書き手・出典を添える。
    - 「確認できる記録はありませんでした」と返ったら、以前に聞いた・決めたと答えてはいけない。
+1-2. 例外: オーナーが案件の名前を出して、その続きの話を始めたら（「ハピホテの続き」など）、/思い出して がなくても
+   open_project でその案件のノートを読んでから答える。ノートにある前提・決まったこと・ボツになった案を、
+   オーナーにもう一度聞いたり、ボツになった案をまた出したりしない。
 2. 道具には exo_session（start_session が返す会話の id）を渡す。まだなければ start_session(include_profile=false)
    を呼んで exo_session だけを受け取る（このとき記憶は読まない）。引数の名前は session_id ではなく exo_session を使う。
 3. オーナーが「覚えておいて」と言ったとき、または決定をはっきり告げたときだけ remember_explicit を呼ぶ。
    words にはオーナーの言葉をなるべくそのまま入れる。自分の判断で「大事そう」と思ったことは入れない。
 4. オーナーが「/日報」と送ったら submit_daily_log を呼ぶ。前回の /日報 のあと（初回は会話の最初から）に
    この会話で起きたことだけを、会話にあった内容だけで書く。該当がない欄は空にする（「特になし」になる）。
+   project には案件名を入れる。理由は、オーナーが言ったときだけ書く（推測しない）。反応は理由に入れない。
    thread_title はこの会話の短い題名。ai_model は実行環境が示すモデル名。わからなければ unknown（推測しない）。
 4-2. オーナーが「/預けて」「exobrain に預けて」と言ったら deposit を呼ぶ。取材の会話か、クライアントの話か、
    機密かがはっきりしないときは、預ける前にオーナーに聞く（郵便の受付のように確かめてから送る）。
@@ -101,18 +105,26 @@ def build_server(brain: Brain) -> MCPServer:
         return guarded(brain.remember_explicit, _session(exo_session, session_id), words, kind, concepts, context)
 
     @server.tool(annotations=appends)
-    def submit_daily_log(thread_title: str, events: list[str] | None = None,
-                         corrections: list[str] | None = None, learnings: list[str] | None = None,
-                         decisions: list[str] | None = None, reasons: list[str] | None = None,
-                         unresolved: list[str] | None = None, ai_model: str = "unknown", exo_session: str = "", session_id: str = "") -> dict[str, Any]:
+    def submit_daily_log(thread_title: str, project: str = "", status: list[str] | None = None,
+                         decisions: list[str] | None = None, rejected: list[str] | None = None,
+                         conditions: list[str] | None = None, reasons: list[str] | None = None,
+                         events: list[str] | None = None, unresolved: list[str] | None = None,
+                         ai_notes: list[str] | None = None, corrections: list[str] | None = None,
+                         learnings: list[str] | None = None, ai_model: str = "unknown",
+                         exo_session: str = "", session_id: str = "") -> dict[str, Any]:
         """オーナーが「/日報」と送ったときに呼ぶ。前回の /日報 のあとに、この会話で起きたことだけを書く。
-        events: 今日の出来事 / corrections: オーナーから注意・訂正されたこと / learnings: 工夫・学び /
-        decisions: 決まったこと / reasons: オーナーがこだわり・理由・気持ちを口にしたもの（何についてかと、オーナーの言葉をなるべくそのまま。AI が人柄や性格を推測して書かない） /
-        unresolved: 未解決・次に続くこと。どれも 1 項目 1 文の配列。
-        会話になかったことは書かない。大脳皮質には書かれず、今夜の睡眠で選ばれたものだけが記憶になる。
-        固有名詞（人・会社・案件・道具・場所）と大事な話題は、各項目で初めて出るときに [[名前]] と書く。会話に出た表記をそのまま使い、同じものが別の呼び方で出たら [[いつもの名前|会話での呼び方]] と書く。オーナーの言葉をそのまま書く項目は、先頭を「> 」にする。"""
+        project: 何の案件の話か（案件名。なければ空）。
+        status: 会話の終わりに案件がどこまで進んだか / decisions: 決まったこと（オーナーが理由を言っていれば「理由: …」）/
+        rejected: ボツになった案とその理由 / conditions: 新しく分かった・変わった前提や条件（注意・訂正されて、これから守ることも含む）/
+        reasons: オーナーが理由やこだわりを言った発言だけを、言い換えずに「> 」で（反応は events へ）/
+        events: あったこと / unresolved: 次にやること / ai_notes: AI 自身の解釈（オーナーの考えと混ぜない）。
+        どれも 1 項目 1 文の配列。理由は、オーナーが言ったときだけ書く。会話になかったことは書かない。
+        大脳皮質には書かれず、今夜の睡眠で選ばれたものだけが記憶になる。
+        固有名詞（人・会社・案件・道具・場所）と大事な話題は、各項目で初めて出るときに [[名前]] と書く。会話に出た表記をそのまま使い、同じものが別の呼び方で出たら [[いつもの名前|会話での呼び方]] と書く。"""
+        more = {"status": status, "rejected": rejected, "conditions": conditions, "ai_notes": ai_notes}
         return guarded(brain.submit_daily_log, _session(exo_session, session_id), thread_title, events or [], corrections or [],
-                       learnings or [], decisions or [], unresolved or [], ai_model, reasons=reasons or [])
+                       learnings or [], decisions or [], unresolved or [], ai_model, reasons=reasons or [],
+                       project=project, more={k: v or [] for k, v in more.items()})
 
     @server.tool(annotations=appends)
     def deposit(thread_title: str, summary: str = "", procedural: list[str] | None = None,
@@ -171,6 +183,18 @@ def build_server(brain: Brain) -> MCPServer:
         return guarded(brain.apply_correction, _session(exo_session, session_id), trace_id, mode, lesson=lesson, kind=kind,
                        concepts=concepts, target_id=target_id, source_id=source_id,
                        wrong_memory_ids=wrong_memory_ids, superseded_ids=superseded_ids)
+
+    @server.tool(annotations=reads)
+    def open_project(name: str) -> dict[str, Any]:
+        """オーナーが案件の名前を出して、その続きの話を始めたときに最初に呼ぶ（「/思い出して」がなくてよい）。
+        その案件の今の状況・前提と条件・決まったこと・ボツになったこと・次にやること・日報の一覧を返す。
+        ここにある前提や決まったことを、オーナーにもう一度聞かない。見つからなければ projects に案件の一覧を返す。"""
+        from .shelves import project_logs, project_note_text
+
+        text = project_note_text(brain, name.strip())
+        if text is None:
+            return {"found": False, "projects": sorted(project_logs(brain))}
+        return {"found": True, "note": text}
 
     @server.tool(annotations=reads)
     def open_source(source_id: str, max_chars: int = 8000) -> dict[str, Any]:

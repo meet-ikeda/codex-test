@@ -557,8 +557,8 @@ def test_reasons_section_is_an_explicit_signal():
               "period_start": "2026-09-29T09:00:00+09:00", "period_end": "2026-09-29T10:00:00+09:00",
               "previous_cursor": "", "cursor": "c1"}
     body = daily.render(fields, "UI", {"reasons": ["設定画面について「ユーザーに考えさせるUIは嫌」と言った"]})
-    assert "## オーナーのこだわり・理由\n\n- 設定画面について" in body
-    assert "オーナーのこだわり・理由" in promote.DAILY_EXPLICIT_SECTIONS
+    assert "## オーナーの言葉\n\n- 設定画面について" in body
+    assert {"オーナーの言葉", "オーナーのこだわり・理由"} <= set(promote.DAILY_EXPLICIT_SECTIONS)  # v2 and old logs
     dep = deposit.render("chatgpt", "UI", {"summary": "s", "reasons": ["「直感的にしたい」と言った"]})
     assert "## こだわり・理由（オーナー本人の言葉）\n\n- 「直感的にしたい」と言った" in dep
 

@@ -4,6 +4,8 @@ Originals never move or change. Around them, every sleep rebuilds:
 
 - 本棚/はじめに.md          the entry note, for people and for AIs reading the Drive
 - 本棚/話題/<名前>.md       one note per [[名前]]: so the marks in daily logs become real links
+- 本棚/案件/<案件名>.md     one note per project: where it stands, conditions, decisions, rejected ideas,
+                           what is next, and every log about it (docs/daily-log-rules.md §5)
 - 本棚/目次/月別/YYYY-MM.md  what came in that month, with its decisions and open items
 - 本棚/目次/決定.md・未解決.md・出所別.md・夢日記.md
 
@@ -27,6 +29,8 @@ if TYPE_CHECKING:
     from .brain import Brain
 
 TOPICS_DIR = "話題"
+PROJECTS_DIR = "案件"
+LOG_KINDS = ("ai_daily", "daily_report", "deposit")
 INDEX_DIR = "目次"
 MONTHS_DIR = "月別"
 ENTRY_NOTE = "はじめに.md"
@@ -37,7 +41,7 @@ KIND_JA = {"memo": "オーナーのメモ", "remember_note": "Obsidian のメモ
            "dream": "夢日記", "good": "/good", "explicit": "覚えておいて", "revision": "書き換えの根拠"}
 NOT_LISTED = {"dream", "conversation_excerpt"}  # listed on their own shelf, or only reached from a daily log
 DECISION_HEADINGS = ("決まったこと", "決定")
-OPEN_HEADINGS = ("未解決・次に続くこと", "未解決")
+OPEN_HEADINGS = ("未解決・次に続くこと", "未解決", "次にやること")
 WIKILINK = re.compile(r"\[\[([^\]\n]+?)\]\]")
 EXCERPT_CHARS = 140
 MAX_MENTIONS = 60  # per topic note; the rest are counted, and the search finds them
@@ -66,6 +70,7 @@ def _confidential(body: str) -> bool:
 
 
 def _section_items(body: str, headings: tuple[str, ...]) -> list[str]:
+    """Kept for callers that pass headings directly; daily.section_items knows both log versions."""
     items, inside = [], False
     for line in body.splitlines():
         if line.startswith("## "):
@@ -294,6 +299,7 @@ def _entry_note(w: _Writer, listed: list[Source], topics: dict[str, Topic], mont
         "exobrain（複数の AI で共有する外部脳）の本棚です。オーナーのメモと、AI が書いた日報・預け入れの**原文**を、"
         "変えずに保管しています。AI の記憶（大脳皮質）はここから育ちます。記憶が薄れても、ここを見れば元の話に戻れます。", "",
         "## 探し方", "",
+        f"- **案件の今を知る:** `{PROJECTS_DIR}/` に、案件ごとのノート（今の状況・前提・決まったこと・ボツ・次にやること・日報の一覧）があります",
         f"- **話題で探す:** `{TOPICS_DIR}/` に、人・会社・案件・道具などの名前ごとのノートがあります。"
         "原文の中の [[名前]] は、このノートへのリンクです。別名でも見つかります（aliases）",
         f"- **時期で探す:** `{INDEX_DIR}/{MONTHS_DIR}/`（その月の資料と、決まったこと・未解決）",
@@ -320,6 +326,93 @@ def _entry_note(w: _Writer, listed: list[Source], topics: dict[str, Topic], mont
     w.files[at] = "\n".join(lines)
 
 
+# ---- project notes (docs/daily-log-rules.md §5) ------------------------------------
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+def project_of(source: Source, known: list[str]) -> str | None:
+    """The project a log belongs to: its 案件 property (log v2), else a known project or topic in its title."""
+    from .daily import PROJECT_KEY, front_matter
+
+    value = str(front_matter(source.body).get(PROJECT_KEY) or "").strip()
+    if value and value != "なし":
+        return value.removeprefix("[[").removesuffix("]]").split("|", 1)[0].strip() or None
+    hits = [name for name in known if name and name in source.title]
+    return max(hits, key=len) if hits else None
+
+
+def _known_projects(brain: Brain) -> list[str]:
+    return [r[0] for r in brain._conn.execute(
+        "SELECT label FROM nodes WHERE kind = 'concept' AND status != 'erased' AND length(label) >= 2")]
+
+
+def project_logs(brain: Brain, sources: list[Source] | None = None) -> dict[str, list[Source]]:
+    sources = _load_sources(brain) if sources is None else sources
+    known = _known_projects(brain)
+    groups: dict[str, list[Source]] = defaultdict(list)
+    for s in sources:
+        if s.kind in LOG_KINDS:
+            name = project_of(s, known)
+            if name:
+                groups[name].append(s)
+    return {n: sorted(g, key=lambda s: s.day, reverse=True) for n, g in groups.items()}
+
+
+def _unique(items: list[tuple[Source, str]]) -> list[tuple[Source, str]]:
+    seen, out = set(), []
+    for s, text in items:
+        key = _norm(text)
+        if key not in seen:
+            seen.add(key)
+            out.append((s, text))
+    return out
+
+
+def project_note(w: _Writer, name: str, logs: list[Source], at: str | None = None) -> str:
+    """One project's note, newest first. Confidential logs are listed by title only."""
+    from .daily import section_items
+
+    at = at or f"{PROJECTS_DIR}/{_safe(name)}.md"
+    readable = [s for s in logs if not s.secret]
+    def items(key: str, only_latest: bool = False) -> list[tuple[Source, str]]:
+        out = []
+        for s in readable:
+            got = section_items(s.body, key)
+            out += [(s, x) for x in got]
+            if only_latest and got:
+                break
+        return _unique(out)
+
+    def block(title: str, rows: list[tuple[Source, str]], empty: str) -> list[str]:
+        lines = [f"## {title}", ""]
+        lines += [f"- {_plain(x)}（{s.day} · {w.link(at, s.path, s.who)}）" for s, x in rows] or [f"- {empty}"]
+        return lines + [""]
+
+    status = items("status", only_latest=True)
+    lines = ["---", f"aliases: []", "tags: [exobrain/案件]", "---", "", f"# {name}", "", NOTICE, "",
+             f"- 日報: {len(logs)} 件（{logs[-1].day} 〜 {logs[0].day}）", ""]
+    lines += block("今の状況", status, "まだ書かれていません（新しい書き方の日報から書かれます）")
+    lines += block("前提・条件", items("conditions"), "まだありません")
+    lines += block("決まったこと", items("decisions"), "まだありません")
+    lines += block("ボツになったこと", items("rejected"), "まだありません")
+    lines += block("次にやること", items("unresolved", only_latest=True), "まだありません")
+    lines += block("オーナーの言葉", [(s, x) for s, x in items("reasons") if x.lstrip().startswith(">")], "まだありません")
+    lines += ["## 日報", ""] + [w.source_line(at, s) for s in logs] + [""]
+    return "\n".join(lines)
+
+
+def project_note_text(brain: Brain, name: str) -> str | None:
+    """For the AIs: a project's note, found by its name or a name close to it."""
+    groups = project_logs(brain)
+    hit = name if name in groups else next((n for n in groups if name and (name in n or n in name)), None)
+    if hit is None:
+        return None
+    return project_note(_Writer(brain), hit, groups[hit])
+
+
 def write_shelf_index(brain: Brain) -> list[str]:
     w = _Writer(brain)
     sources = _load_sources(brain)
@@ -327,11 +420,13 @@ def write_shelf_index(brain: Brain) -> list[str]:
     related = _related(topics)
     for name, t in topics.items():
         w.files[f"{TOPICS_DIR}/{_safe(name)}.md"] = _topic_note(w, t, related[name])
+    for name, logs in project_logs(brain, sources).items():
+        w.files[f"{PROJECTS_DIR}/{_safe(name)}.md"] = project_note(w, name, logs)
     _index_notes(w, sources, topics)
 
     # A note we made that is not rebuilt tonight (a topic that went away) is removed.
     # Anything else in these folders was put there by a person, and stays.
-    for folder in (TOPICS_DIR, f"{INDEX_DIR}/{MONTHS_DIR}", INDEX_DIR):
+    for folder in (TOPICS_DIR, PROJECTS_DIR, f"{INDEX_DIR}/{MONTHS_DIR}", INDEX_DIR):
         d = w.shelf / folder
         if d.is_dir():
             for old in d.glob("*.md"):
