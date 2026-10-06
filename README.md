@@ -3,10 +3,11 @@
 どの AI の、どのスレッドでも、あなたのことを最初から知っている状態で会話を始めるための記憶アプリです。
 情報を「要素」に分けて「つながり」で結び、人間の脳のように記憶します。
 
-- **統合仕様書 v0.6（最新。OUTBRAIN v0.4 の記憶モデルと統合）: [docs/spec-v0.6.md](docs/spec-v0.6.md)**
-- **改訂 v0.7（判断役 Jev・忘却と覚え直し・つながりの根拠。提案）: [docs/spec-v0.7.md](docs/spec-v0.7.md)**
+- **仕様書 v0.8（最新。これだけ読めばよい）: [docs/spec-v0.8.md](docs/spec-v0.8.md)**
+- 日報の書き方: [docs/daily-log-rules.md](docs/daily-log-rules.md)、記憶の流れの図: [docs/flow.html](docs/flow.html)
+- 経緯: [v0.6](docs/spec-v0.6.md)・[v0.7](docs/spec-v0.7.md)（v0.8 にまとめ直した）
 - 要件: [docs/requirements.md](docs/requirements.md)
-- 設計: [docs/design.md](docs/design.md)（v0.1 の設計。v0.5 と食い違う部分は v0.5 が優先）
+- 設計: [docs/design.md](docs/design.md)（v0.1 の設計。v0.8 と食い違う部分は v0.8 が優先）
 - 評価: [docs/eval-questions-v2.md](docs/eval-questions-v2.md)（固定した評価質問）、[docs/eval-embedding.md](docs/eval-embedding.md)（検索の設定の測定）
 - Mac への導入手順: [docs/setup-mac.md](docs/setup-mac.md)
 
