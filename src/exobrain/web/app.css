@@ -299,7 +299,7 @@ body.intro-on { overflow: hidden; }
 
 /* ---- 06 Memory: memory.md drawn out of the brain ---------------------------------------- */
 .tab-memory { position: relative; overflow-y: auto; min-height: calc(100vh - 64px); }
-.memory-canvas { position: absolute; inset: 0; pointer-events: none; }
+.memory-canvas { position: fixed; left: 0; top: 64px; pointer-events: none; }
 .memory-wrap { position: relative; margin-left: 47%; max-width: 720px; padding: 56px 56px 120px 0; }
 .memory-head { margin-bottom: 36px; }
 .memory-actions { margin-top: 22px; gap: 18px; align-items: center; }

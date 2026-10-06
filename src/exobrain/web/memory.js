@@ -13,7 +13,7 @@
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const N = 2400;
-  let pts = null, W = 0, H = 0, DPR = 1, raf = 0, t0 = 0, last = 0;
+  let pts = null, W = 0, H = 0, TOP = 0, DPR = 1, raf = 0, t0 = 0, last = 0, revealing = 0;
   let flyers = [], emitRate = 1.2, emitCarry = 0, generating = false;
   let projected = new Float32Array(N * 3); // x, y, depth for this frame
 
@@ -29,32 +29,30 @@
     }
   }
 
-  function resize() {
-    const r = room.getBoundingClientRect();
+  function resize() { // the canvas stays put under the bar while the page scrolls over it
+    const bar = document.querySelector("header.bar");
+    TOP = bar ? bar.getBoundingClientRect().bottom : 0;
     DPR = Math.min(2, window.devicePixelRatio || 1);
-    W = r.width; H = Math.max(r.height, window.innerHeight - r.top);
+    W = window.innerWidth; H = window.innerHeight - TOP;
+    canvas.style.top = `${TOP}px`;
     canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
     canvas.style.width = `${W}px`; canvas.style.height = `${H}px`;
   }
 
   function layout() {
-    const narrow = W < 900;
-    const vh = Math.min(H, window.innerHeight);
-    return narrow
-      ? { cx: W * 0.5, cy: 190, s: Math.min(W * 0.36, 170), alpha: 0.35 }
-      : { cx: W * 0.25, cy: Math.min(vh * 0.5, 430), s: Math.min(W * 0.2, vh * 0.42, 300), alpha: 0.6 };
+    return W < 900
+      ? { cx: W * 0.5, cy: 150, s: Math.min(W * 0.34, 150), alpha: 0.2 }  // faint behind the text on a phone
+      : { cx: W * 0.25, cy: H * 0.5, s: Math.min(W * 0.2, H * 0.4, 300), alpha: 0.6 };
   }
 
   // ---- particles flying from the brain to the page ------------------------------------
 
-  function target(block) {
-    const rr = room.getBoundingClientRect();
-    if (block) {
-      const b = block.getBoundingClientRect();
-      return { x: b.left - rr.left - 10, y: b.top - rr.top + Math.random() * Math.max(8, b.height) };
-    }
-    const d = doc.getBoundingClientRect();
-    return { x: d.left - rr.left - 10, y: d.top - rr.top + 20 + Math.random() * Math.min(d.height + 40, window.innerHeight * 0.6) };
+  function target(block) { // where on the canvas a block (or the page) is; null if it is not on screen
+    const b = (block && block.isConnected ? block : doc).getBoundingClientRect();
+    if (!b.width) return null;
+    const y0 = Math.max(b.top, TOP + 20) - TOP, y1 = Math.min(b.bottom, window.innerHeight - 20) - TOP;
+    if (y1 < y0) return null; // scrolled out of sight
+    return { x: b.left - 10, y: y0 + Math.random() * Math.max(6, Math.min(y1 - y0, 360)) };
   }
 
   function emit(n, block, scanX) {
@@ -68,6 +66,7 @@
       }
       const sx = projected[i * 3], sy = projected[i * 3 + 1];
       const tg = target(block);
+      if (!tg) return;
       const mx = (sx + tg.x) / 2 + (Math.random() - 0.5) * 60, my = Math.min(sy, tg.y) - 40 - Math.random() * 120;
       flyers.push({ sx, sy, mx, my, tx: tg.x, ty: tg.y, t: 0, dur: 0.9 + Math.random() * 0.9, px: sx, py: sy });
     }
@@ -76,7 +75,7 @@
   // ---- frame ------------------------------------------------------------------------------
 
   function frame(now) {
-    if (room.hidden || document.visibilityState !== "visible") { raf = 0; return; }
+    if (room.hidden) { raf = 0; return; } // requestAnimationFrame itself rests while the window is hidden
     const t = (now - t0) / 1000, dt = Math.min(0.05, (now - last) / 1000 || 0.016);
     last = now;
     const L = layout();
@@ -194,10 +193,12 @@
 
   async function reveal(md) {
     const parts = blocks(md);
+    const mine = ++revealing; // a newer reveal takes over
     doc.replaceChildren(...parts);
     if (reduce) { parts.forEach((p) => p.classList.add("on")); return; }
     for (const p of parts) {
       await new Promise((r) => setTimeout(r, p.tagName === "UL" ? 260 : 140));
+      if (mine !== revealing) return;
       if (room.hidden) { parts.forEach((q) => q.classList.add("on")); return; }
       emit(p.tagName === "UL" ? 26 : 14, p, null);
       setTimeout(() => p.classList.add("on"), 420);
