@@ -22,6 +22,7 @@
     <button role="tab" data-tab="shelf" data-icon="shelf" data-icon-size="15"><span class="num">03</span>Bookshelf</button>
     <button role="tab" data-tab="sleep" data-icon="sleep" data-icon-size="15"><span class="num">04</span>Sleep</button>
     <button role="tab" data-tab="safety" data-icon="safety" data-icon-size="15"><span class="num">05</span>Safety</button>
+    <button role="tab" data-tab="memory" data-icon="memory" data-icon-size="15"><span class="num">06</span>Memory</button>
   </nav>
   <div class="index">
     <span><b id="m-nodes">—</b> memories</span>
@@ -278,11 +279,26 @@
   <article id="dialog-body" class="reader"></article>
 </dialog>
 
+<!-- 06 MEMORY: what this brain thinks, drawn out of it -->
+<main id="tab-memory" class="tab tab-memory" hidden>
+  <canvas id="memory-canvas" class="memory-canvas" aria-hidden="true"></canvas>
+  <div class="memory-wrap">
+    <header class="room-head memory-head">
+      <p class="room">Room 06</p>
+      <h1 class="display">memory.md</h1>
+      <p class="lede">大脳皮質の記憶をすべて読み、この脳が何を思っているかを 1 ページにしたもの。AI の読みであって、脳そのものではありません。文末の番号は根拠の記憶で、押すとその記憶を開きます。</p>
+      <div class="row memory-actions"><button id="memory-write" class="btn ghost">いま読み直す</button><span id="memory-meta" class="cap"></span></div>
+    </header>
+    <article id="memory-doc" class="memory-doc" aria-live="polite"></article>
+  </div>
+</main>
+
 <script src="vendor/graphology.umd.min.js"></script>
 <script src="vendor/graphology-library.min.js"></script>
 <script src="galaxy.js"></script>
 <script src="icons.js"></script>
 <script src="app.js"></script>
 <script src="intro.js"></script>
+<script src="memory.js"></script>
 </body>
 </html>

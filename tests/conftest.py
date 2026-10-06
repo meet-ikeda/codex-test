@@ -15,6 +15,17 @@ def no_real_launch_agents(monkeypatch, tmp_path):
     monkeypatch.setattr(macos, "apply_sleep_timer", lambda settings, timer: False)
 
 
+@pytest.fixture(autouse=True)
+def no_real_claude_for_memory_md(monkeypatch):
+    """memory.md is written by the real Claude Code after a sleep; tests never call it."""
+    import exobrain.portrait as portrait
+
+    def refuse(brain):
+        raise RuntimeError("tests do not call Claude Code")
+
+    monkeypatch.setattr(portrait, "write", refuse)
+
+
 @pytest.fixture
 def settings(tmp_path):
     return Settings(home=tmp_path / "home", drive_root=tmp_path / "drive", embed_model="")

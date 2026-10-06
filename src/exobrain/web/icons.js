@@ -11,6 +11,9 @@ const ICONS = {
   // 02 Cortex — memories joined by links
   cortex: ["M5 6.5a1.5 1.5 0 1 0 0 .01", "M18.5 5a1.5 1.5 0 1 0 0 .01", "M12 12a2 2 0 1 0 0 .01", "M6 18.5a1.5 1.5 0 1 0 0 .01",
     "M19 17.5a1.5 1.5 0 1 0 0 .01", "M6.3 7.3 10.4 10.8", "M17.3 5.9 13.5 10.6", "M7.2 17.6 10.4 13.3", "M17.6 16.8 13.8 13.1", "M6.5 6.4 17 5.1"],
+  // 06 Memory — a page drawn out of the brain: lines of text, and a thread leaving the top corner
+  memory: ["M6 3.5h8.5l3.5 3.5v13.5H6z", "M14.5 3.5V7H18", "M8.6 11h6.8", "M8.6 14h6.8", "M8.6 17h4.2",
+    "M3.2 7.5c1.2-.2 2 .3 2.8 1.2"],
   // 03 Bookshelf — books standing on a shelf, one leaning
   shelf: ["M3 20.5h18", "M5 20.5V6h2.8v14.5", "M7.8 20.5V8.5h2.6v12", "M11.8 20.5 13.9 7.3l2.6.4-2.1 13.2", "M17.5 20.5V9.5H20v11"],
   // 04 Sleep — a crescent and a small star

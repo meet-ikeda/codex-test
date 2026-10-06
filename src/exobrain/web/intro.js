@@ -4,6 +4,7 @@
 "use strict";
 
 (function () {
+  window.exobrainBrainPoints = (n) => brainPoints(n); // shared with memory.js (Room 06)
   const overlay = document.getElementById("intro");
   const canvas = document.getElementById("intro-canvas");
   if (!overlay || !canvas) return;

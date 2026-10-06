@@ -43,6 +43,7 @@ class App:
         self.token = secrets.token_urlsafe(24)
         self.erase_plans: dict[str, dict] = {}
         self.sleep_state: dict[str, Any] = {"running": False}
+        self.memory_state: dict[str, Any] = {"running": False}
         self._stop = threading.Event()
 
     # ---- graph ----------------------------------------------------------------------
@@ -197,6 +198,30 @@ class App:
 
         threading.Thread(target=work, daemon=True).start()
         return self.sleep_state
+
+    # ---- memory.md: what this brain thinks ------------------------------------------------
+
+    def memory(self) -> dict[str, Any]:
+        from . import portrait
+
+        return {**portrait.read(self.brain), **self.memory_state}
+
+    def write_memory(self) -> dict[str, Any]:
+        from . import portrait
+
+        if self.memory_state.get("running"):
+            raise InvalidInput("いま要約を作っています。")
+        self.memory_state = {"running": True, "started_at": datetime.now(timezone.utc).isoformat()}
+
+        def work():
+            try:
+                portrait.write(self.brain)
+                self.memory_state = {"running": False}
+            except Exception as e:  # shown on screen
+                self.memory_state = {"running": False, "error": str(e)}
+
+        threading.Thread(target=work, daemon=True).start()
+        return self.memory_state
 
     def sleep_status(self) -> dict[str, Any]:
         last = sleep.last_sleep(self.brain)
@@ -371,6 +396,8 @@ class App:
             return self.brain.open_source(path.rsplit("/", 1)[1], 200_000)
         if path == "/api/search":
             return {"bookshelf": self.brain.search_bookshelf(q.get("q", ""), limit=20)}
+        if path == "/api/memory":
+            return self.memory()
         if path == "/api/sleep":
             return self.sleep_status()
         if path == "/api/safety":
@@ -386,6 +413,8 @@ class App:
             return self.start_sleep(bool(body.get("use_ai", True)))
         if path == "/api/rule/review":  # the owner's yes / no on a tentative rule (spec v0.8 §6.1)
             return self.brain.review_rule(str(body.get("id") or ""), str(body.get("verdict") or ""), "", "human")
+        if path == "/api/memory":
+            return self.write_memory()
         if path == "/api/sleep/timer":
             return self.set_timer(body)
         if path == "/api/backfill":

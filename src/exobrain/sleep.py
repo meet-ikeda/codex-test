@@ -977,5 +977,12 @@ def run(brain: Brain, use_ai: bool = True, runner: Runner = claude_runner) -> di
 
         if rules_export.enabled(brain):  # off unless the owner turned it on (spec v0.8 §6.5)
             out["rules_written_to"] = rules_export.write(brain)
+        if use_ai:  # memory.md: what the brain thinks after tonight (a short, tool-less call)
+            from . import portrait
+
+            try:
+                portrait.write(brain)
+            except Exception as e:  # noqa: BLE001 — the sleep itself went well; the summary waits for next time
+                out["memory_md"] = str(e)
         out["usage"] = usage_of(brain, run_id)
         return out
