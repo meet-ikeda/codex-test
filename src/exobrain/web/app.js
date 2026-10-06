@@ -352,7 +352,8 @@ async function selectNode(id) {
   await guarded(async () => renderDetail(await api(`/api/node/${encodeURIComponent(id)}`)));
 }
 
-function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes = [], case: kase = null, derived_from = [] }) {
+function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes = [], derived_from = [] }) {
+  const kase = node.case || null;
   const parts = [
     el("button", { class: "close", on: { click: clearSelection } }, "Close ×"),
     el("p", { class: "room" }, node.kind === "concept" ? "Concept" : KIND_EN[node.kind]),
