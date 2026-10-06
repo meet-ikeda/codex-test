@@ -26,7 +26,7 @@ def test_daily_report_goes_to_shelf_and_brain(brain, settings, session):
 
     ep = brain.node(r["nodes"][0]["id"])
     assert ep["source_id"] == r["source_id"] and ep["created_by"] == "ai:Claude Desktop"
-    assert brain.stats() == {"episode": 1, "semantic": 1, "procedural": 1, "concept": 3,
+    assert brain.stats() == {"episode": 1, "semantic": 1, "procedural": 1, "case": 0, "concept": 3,
                              "edges": 4 + 3, "sources": 1, "events": brain.stats()["events"]}
     assert brain.verify()[0]
 
@@ -68,12 +68,15 @@ def test_rebuild_reproduces_projections(brain, session):
     assert brain.snapshot() == before
 
 
-def test_profile_puts_rules_first_within_budget(brain, session):
+def test_profile_hands_out_confirmed_rules_for_all_work_within_budget(brain, session):
+    """Spec v0.8 §8.1: the start of a conversation carries only confirmed rules with no scope."""
     brain.remember(session, [{"kind": "semantic", "text": "会社は meeting", "importance": 1.0}])
-    brain.remember(session, [{"kind": "procedural", "text": f"ルール{i}" * 20, "importance": 0.8}
-                             for i in range(30)])
+    brain.remember(session, [{"kind": "procedural", "text": "まだ整理していない古いルール", "importance": 1.0}])
+    for i in range(30):
+        brain.remember_explicit(session, f"ルール{i}" * 20, "procedural")
     profile = brain.start_session("Codex")["profile"]
     assert profile.splitlines()[0].startswith("- [ルール]")
+    assert "会社は meeting" not in profile and "古いルール" not in profile
     assert estimate_tokens(profile) <= 500
 
 

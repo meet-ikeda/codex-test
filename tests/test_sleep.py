@@ -92,7 +92,7 @@ def test_memo_is_promoted_with_a_quote_cut_by_the_program(brain, session):
         if item["type"] == "promote":
             assert item["signal"] == "explicit" and item["lines"][0] == [1, "写真は全て社内撮影にする"]
             return {"item_id": item["item_id"], "atoms": [
-                {"kind": "procedural", "text": "採用サイトの写真は全て社内撮影", "derivation": "paraphrase",
+                {"kind": "semantic", "text": "採用サイトの写真は全て社内撮影", "derivation": "paraphrase",
                  "lines": [1, 2], "confidence": 0.9, "concepts": ["採用サイト", "写真"]}]}
         if item["type"] == "shelve":
             return {"item_id": item["item_id"], "assignments": {s["source_id"]: ["採用サイト"] for s in item["sources"]}}
@@ -101,7 +101,7 @@ def test_memo_is_promoted_with_a_quote_cut_by_the_program(brain, session):
     run_id, seen = work_through(brain, answer)
     assert seen[0] == "promote" and "shelve" in seen and "decompose" not in seen
     node = brain._conn.execute("SELECT * FROM nodes WHERE source_id = ?", (memo["source_id"],)).fetchone()
-    assert node["created_by"] == "sleep" and node["kind"] == "procedural" and node["promoted_by"] == "explicit"
+    assert node["created_by"] == "sleep" and node["kind"] == "semantic" and node["promoted_by"] == "explicit"
     assert node["derivation"] == "paraphrase" and node["importance"] == 1.0
     quote = brain._conn.execute("SELECT quote, line_start, line_end FROM node_sources WHERE node_id = ?",
                                 (node["id"],)).fetchone()
@@ -118,10 +118,10 @@ def test_verbatim_that_is_not_in_the_original_becomes_paraphrase(brain, session)
     state = sleep.SleepState(run_id)
     batch = sleep.next_batch(brain, state)
     item = next(i for i in batch["items"] if i["type"] == "promote")
-    atoms = [{"kind": "procedural", "text": "1回3資料・8チャンクを上限とする", "derivation": "verbatim", "lines": [1, 1]},
-             {"kind": "procedural", "text": "1回あたも3資料を上限とする", "derivation": "verbatim", "lines": [1, 1]}]
+    atoms = [{"kind": "semantic", "text": "1回3資料・8チャンクを上限とする", "derivation": "verbatim", "lines": [1, 1]},
+             {"kind": "semantic", "text": "1回あたも3資料を上限とする", "derivation": "verbatim", "lines": [1, 1]}]
     sleep.apply(brain, state, batch["batch_id"], [{"item_id": item["item_id"], "atoms": atoms}])
-    got = dict(brain._conn.execute("SELECT body, derivation FROM nodes WHERE kind = 'procedural'").fetchall())
+    got = dict(brain._conn.execute("SELECT body, derivation FROM nodes WHERE kind = 'semantic'").fetchall())
     assert got == {"1回3資料・8チャンクを上限とする": "verbatim", "1回あたも3資料を上限とする": "paraphrase"}
 
 
@@ -173,11 +173,11 @@ def test_the_same_thing_again_adds_evidence_instead_of_a_new_memory(brain, sessi
             return {"item_id": item["item_id"], "keep": [], "drop": []} if item["type"] == "verify_links" else \
                 {"item_id": item["item_id"], "assignments": {}}
         if item["source_id"] == first["source_id"]:
-            return {"item_id": item["item_id"], "atoms": [{"kind": "procedural", "text": "資料は PDF で共有する",
+            return {"item_id": item["item_id"], "atoms": [{"kind": "semantic", "text": "資料は PDF で共有する",
                                                            "derivation": "verbatim", "lines": [1, 1]}]}
         same = next(m for m in item["similar_memories"] if m["text"] == "資料は PDF で共有する")
         existing["id"] = same["id"]
-        return {"item_id": item["item_id"], "atoms": [{"kind": "procedural", "text": "資料は PDF で共有する",
+        return {"item_id": item["item_id"], "atoms": [{"kind": "semantic", "text": "資料は PDF で共有する",
                                                        "derivation": "paraphrase", "lines": [1, 1],
                                                        "same_as": same["id"]}]}
 
@@ -195,7 +195,7 @@ def test_daily_log_sections_decide_what_is_a_candidate(brain, session):
     batch = sleep.next_batch(brain, sleep.SleepState(run_id))
     promoted = [i for i in batch["items"] if i["type"] == "promote"]
     texts = ["\n".join(t for _, t in i["lines"]) for i in promoted]
-    assert len(promoted) == 2 and all(i["signal"] == "explicit" for i in promoted)
+    assert len(promoted) == 2 and all(i["signal"] == "summarized" for i in promoted)  # an AI summed these up
     assert any("注意された" in t for t in texts) and any("写し" in t for t in texts)
     assert not any("雑談" in t for t in texts)  # events are promoted only when they repeat
 
@@ -347,7 +347,7 @@ def test_sleep_through_claude_code(brain, settings, session, tmp_path):
     assert brain.verify()[0]
     assert out["usage"]["output_tokens"] == 200 and out["usage"]["cost_usd"] == 0.12
     copy = settings.drive_root / "大脳皮質"
-    assert (copy / "大脳皮質.md").exists() and any((copy / "手続き記憶").glob("資料は PDF で共有する__*.md"))
+    assert (copy / "大脳皮質.md").exists() and any((copy / "意味記憶").glob("資料は PDF で共有する__*.md"))
 
 
 def test_a_sleep_without_ai_does_not_make_the_night_skip(brain):

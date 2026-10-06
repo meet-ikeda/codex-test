@@ -33,7 +33,7 @@ CUE_MATCH_MIN = 0.12  # bigram overlap that counts as "matches the cue"
 RECENCY_DAYS = 30.0
 LINK_HALF_LIFE_DAYS = 30.0  # unused links fade...
 LINK_FLOOR = 0.3  # ...but never below 30% of their learned weight: long-term memory stays reachable
-KIND_LABEL_JA = {"episode": "出来事", "semantic": "知識", "procedural": "ルール", "concept": "概念"}
+KIND_LABEL_JA = {"episode": "出来事", "semantic": "知識", "procedural": "ルール", "concept": "概念", "case": "事例"}
 
 
 def effective_weight(weight: float, last_reinforced_at: str | None, now: datetime) -> float:
@@ -82,6 +82,8 @@ class Hit:
     score: float
     hops: int
     path: list[str]  # node ids from a seed to this node
+    stage: str | None = None  # rules: tentative | confirmed | None (not yet sorted, spec v0.8 §11.3)
+    scope: str | None = None
 
 
 class Recaller:
@@ -191,7 +193,8 @@ class Recaller:
             q = ",".join("?" * len(part))
             for r in self.conn.execute(
                 f"SELECT id, kind, body, created_at, created_by, importance, base_strength, access_count,"
-                f" last_activated_at FROM nodes WHERE id IN ({q}) AND status = 'active' AND kind != 'concept'",
+                f" last_activated_at, stage, scope FROM nodes WHERE id IN ({q}) AND status = 'active'"
+                f" AND kind != 'concept'",
                 part,
             ):
                 last = r["last_activated_at"] or r["created_at"]
@@ -200,7 +203,7 @@ class Recaller:
                 base = r["base_strength"] * (1 + math.log1p(r["access_count"])) * recency * (0.5 + r["importance"])
                 a = activation[r["id"]]
                 hits.append(Hit(r["id"], r["kind"], r["body"], r["created_at"], r["created_by"], a, a * base,
-                                hops[r["id"]], self._path(r["id"], parent)))
+                                hops[r["id"]], self._path(r["id"], parent), r["stage"], r["scope"]))
         hits.sort(key=lambda h: -h.score)
         return hits
 
@@ -218,13 +221,15 @@ class Recaller:
         return {r[0]: r[1] for r in self.conn.execute(f"SELECT id, label FROM nodes WHERE id IN ({q})", ids)}
 
     def standing_rules(self, exclude: set[str], limit: int = 20) -> list[Hit]:
-        """Strongest rules overall, used to fill the rules share when the cue activates few."""
+        """Strongest confirmed rules for all work, used to fill the rules share when the cue activates few."""
         rows = self.conn.execute(
-            "SELECT id, kind, body, created_at, created_by FROM nodes WHERE status = 'active'"
-            " AND kind = 'procedural' ORDER BY pinned DESC, importance * base_strength DESC, access_count DESC LIMIT ?",
+            "SELECT id, kind, body, created_at, created_by, stage, scope FROM nodes WHERE status = 'active'"
+            " AND kind = 'procedural' AND (pinned = 1 OR (stage = 'confirmed' AND COALESCE(scope, '') = ''))"
+            " ORDER BY pinned DESC, importance * base_strength DESC, access_count DESC LIMIT ?",
             (limit + len(exclude),),
         )
-        return [Hit(r[0], r[1], r[2], r[3], r[4], 0.0, 0.0, 0, [r[0]]) for r in rows if r[0] not in exclude][:limit]
+        return [Hit(r[0], r[1], r[2], r[3], r[4], 0.0, 0.0, 0, [r[0]], r[5], r[6])
+                for r in rows if r[0] not in exclude][:limit]
 
 
 # ---- packing -----------------------------------------------------------------
@@ -241,9 +246,16 @@ def _source_note(hit: Hit) -> str:
 
 
 def format_line(hit: Hit) -> str:
+    where = f"（{hit.scope} の中だけ）" if hit.scope else ""
     if hit.kind == "procedural":
-        return f"- {hit.body} [{hit.id}]"
-    return f"- [{KIND_LABEL_JA[hit.kind]}] {hit.body}（{_source_note(hit)}）[{hit.id}]"
+        if hit.stage == "confirmed":
+            return f"- {hit.body}{where} [{hit.id}]"
+        if hit.stage == "tentative":  # grown from cases, not yet confirmed by the owner (spec v0.8 §6.1)
+            return f"- [仮のルール] {hit.body}{where} [{hit.id}]"
+        return f"- [未整理のルール] {hit.body} [{hit.id}]"
+    if hit.kind == "case":  # a past judgment: apply its reason, not its decision (spec v0.8 §5.2)
+        return f"- [事例・そのときの判断] {hit.body}{where}（{_source_note(hit)}）[{hit.id}]"
+    return f"- [{KIND_LABEL_JA[hit.kind]}] {hit.body}{where}（{_source_note(hit)}）[{hit.id}]"
 
 
 @dataclass
@@ -286,7 +298,7 @@ def pack(recaller: Recaller, hits: list[Hit], cue_ids: set[str], budget: int) ->
     chosen: set[str] = set()
 
     # 1) Rules: activated rules first, then the strongest standing rules.
-    activated_rules = [h for h in hits if h.kind == "procedural"]
+    activated_rules = [h for h in hits if h.kind == "procedural" and h.stage in ("confirmed", "tentative")]
     rules = take(activated_rules, int(budget * RULES_SHARE))
     chosen |= {h.id for h in rules}
     rest = int(budget * RULES_SHARE) - sum(estimate_tokens(format_line(h)) + 1 for h in rules)

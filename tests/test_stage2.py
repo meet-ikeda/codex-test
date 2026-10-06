@@ -459,7 +459,8 @@ def test_deposit_from_chat_goes_through_the_hippocampus_as_explicit(brain, sessi
     run_id, _ = sleep.start(brain)
     batch = sleep.next_batch(brain, sleep.SleepState(run_id))
     items = [i for i in batch["items"] if i["type"] == "promote"]
-    assert items and all(i["signal"] == "explicit" and i["max_atoms"] == 8 for i in items)
+    # The deposit is an AI's summary (one step weaker), except the owner's-words section (spec v0.8 §7.2).
+    assert items and all(i["signal"] in ("explicit", "summarized") and i["max_atoms"] == 8 for i in items)
     assert "預けると決めた会話" in items[0]["instructions"]
     assert brain.deposit(session, "採用サイトの相談", "採用サイトの構成を相談した。", ["見出しは短くする"],
                          ["オーナーはA社の採用サイトの構成を考えている"], ["9/27 に構成案を2つ出した"])["filed"] is False
@@ -586,7 +587,7 @@ def test_marked_names_become_typed_concepts_with_aliases(brain):
     atoms = promote.validate(b, item, {"atoms": [
         {"kind": "semantic", "text": "[[A社|A社様]]の採用サイトは写真を社内で撮る", "derivation": "verbatim",
          "lines": [n, n], "confidence": 0.9, "concepts": [{"name": "A社", "type": "organization"}]},
-        {"kind": "procedural", "text": "考えさせるUIは嫌", "derivation": "verbatim", "lines": [q, q],
+        {"kind": "semantic", "text": "考えさせるUIは嫌", "derivation": "verbatim", "lines": [q, q],
          "confidence": 0.9, "concepts": []}]})
     assert atoms[0]["text"] == "A社様の採用サイトは写真を社内で撮る" and atoms[0]["derivation"] == "verbatim"
     assert atoms[1]["derivation"] == "verbatim"

@@ -67,6 +67,9 @@ def _settings(a) -> int:
                 return 1
         cfg["daily_logs_since"] = a.daily_logs_from or None
         changed = True
+    if a.export_rules is not None:
+        cfg["export_rules"] = a.export_rules == "on"
+        changed = True
     if changed:
         home.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
@@ -170,6 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--remove-extra-inbox", action="append", default=[])
     s.add_argument("--embed-model", help="Ollama の埋め込みモデル（空文字で意味検索を止める）")
     s.add_argument("--downloads", help="AI 日報を拾うダウンロードフォルダ（空文字で見張らない）")
+    s.add_argument("--export-rules", choices=("on", "off"),
+                   help="本決まりのルールを ~/.codex/AGENTS.md と ~/.claude/CLAUDE.md の exobrain の枠に書き出す（睡眠のたび）")
     s.add_argument("--daily-logs-from", help="Codex・Claude Code の会話から毎晩日報を作る。この日付以降の会話が対象"
                                               "（例: 2026-09-27。空文字で止める）")
 
@@ -183,6 +188,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("thread_ids", nargs="*", help="exobrain threads の id（先頭の数文字でよい）")
     s.add_argument("--cancel", action="store_true", help="取り込み待ちから外す")
 
+    s = sub.add_parser("repromote", help="本棚の原文から、今の入れ方で大脳皮質を作り直す（先にバックアップを取る）")
+    s.add_argument("--since", required=True, help="この日（YYYY-MM-DD）以降の原文を覚え直す")
+    s.add_argument("--yes", action="store_true", help="確認せずに実行する")
     sub.add_parser("export", help="大脳皮質の写しを Google ドライブに書き出す（睡眠のたびにも自動で書き出す）")
     s = sub.add_parser("usage", help="睡眠で使ったトークン数を見る")
     s.add_argument("--days", type=int, default=7)
@@ -279,6 +287,18 @@ def main(argv: list[str] | None = None) -> int:
                       + (f" 海馬に見つからなかったもの: {', '.join(missing)}" if missing else ""))
             elif a.cmd in ("threads", "backfill"):
                 return _threads(brain, a)
+            elif a.cmd == "repromote":
+                from . import repromote
+
+                p = repromote.plan(brain, a.since)
+                print(f"{a.since} 以降の原文 {len(p['sources'])} 件を海馬に戻し、次の睡眠から覚え直します。\n"
+                      f"- 睡眠が作った記憶 {len(p['retire'])} 件を外します（履歴とつながりは残ります）\n"
+                      f"- オーナーが直接入れた記憶 {p['kept']} 件は残します。うちルール {len(p['confirm'])} 件を本決まりにします\n"
+                      "- 先にバックアップを取ります。消すものはありません")
+                if not a.yes and input("実行しますか？ [y/N] ").strip().lower() != "y":
+                    print("やめました。")
+                    return 1
+                _print(repromote.run(brain, a.since))
             elif a.cmd == "export":
                 from .cortex_export import cortex_root, export
 

@@ -148,7 +148,9 @@ def apply(brain: Brain, session_id: str, trace_id: str, mode: str, lesson: str =
         def add_node(k: str, text: str, src: str | None, importance: float) -> str:
             nid = new_id("n")
             brain._emit(actor, "node_added", {"id": nid, "kind": k, "label": make_label(text), "body": text,
-                                              "source_id": src, "importance": importance})
+                                              "source_id": src, "importance": importance,
+                                              # the owner pointed it out: a rule from their own correction holds
+                                              **({"stage": "confirmed"} if k == "procedural" else {})})
             for cid in context_ids:
                 brain._link(actor, nid, cid, "about", W_ABOUT, "correction")
             created.append({"id": nid, "kind": k, "text": text})

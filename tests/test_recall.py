@@ -19,6 +19,8 @@ def world(brain, session):
     """A small brain: direct answers about exobrain, plus a distant idea two links away."""
     ids = {}
     ids["rule"] = remember(brain, session, "procedural", "作る前に要件を確認する", ["進め方"], 0.9)
+    with brain._tx():  # a standing rule is one the owner confirmed (spec v0.8 §6.1)
+        brain._emit("human", "node_updated", {"id": ids["rule"], "stage": "confirmed"})
     ids["shelf"] = remember(brain, session, "episode", "exobrain では原文を本棚にそのまま保管すると決めた",
                             ["exobrain", "原文保管"])
     r = report(brain, session, [
@@ -96,7 +98,8 @@ def test_budget_is_respected_with_many_memories(brain, session, budget):
     r = brain.recall(session, "話題3 と 話題7 の件を相談したい", budget=budget)
     assert 0 < r["tokens"] <= budget
     # The cue matches no memory text, so part of the budget goes to looking through the records (spec v0.5 §7.1).
-    assert len(r["memory_ids"]) >= 3
+    # Old, unsorted rules no longer take the rules share (spec v0.8 §8.1), so the smallest budget holds fewer.
+    assert len(r["memory_ids"]) >= (1 if budget < 500 else 3)
 
 
 def test_recall_is_fast_enough(brain, session):

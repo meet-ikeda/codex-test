@@ -90,7 +90,7 @@ ul.plain, ol.plain { list-style: none; margin: 0; padding: 0; }
 .glyph { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: -1px; flex: none; font-style: normal; }
 .glyph-semantic { background: var(--ink); width: 7px; height: 7px; margin: 0 9px 0 1px; }
 .glyph-procedural { border: 1.5px solid var(--ink); }
-.glyph-episode { background: radial-gradient(circle, var(--ink) 0, rgba(10, 10, 10, .55) 35%, rgba(10, 10, 10, 0) 72%); width: 11px; height: 11px; margin: 0 7px 0 -1px; }
+.glyph-episode, .glyph-case { background: radial-gradient(circle, var(--ink) 0, rgba(10, 10, 10, .55) 35%, rgba(10, 10, 10, 0) 72%); width: 11px; height: 11px; margin: 0 7px 0 -1px; }
 .glyph-concept { border-radius: 0; background: linear-gradient(var(--ink), var(--ink)) center / 1px 100% no-repeat, linear-gradient(var(--ink), var(--ink)) center / 100% 1px no-repeat; }
 
 /* ---------- graph ---------- */

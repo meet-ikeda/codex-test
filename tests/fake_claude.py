@@ -39,7 +39,7 @@ def answer(item):
         evidence = item.get("evidence")
         evidence_lines = [evidence["lines"][0][0]] * 2 if evidence else None
         return {"item_id": item["item_id"], "atoms": [
-            {"kind": "procedural", "text": first.lstrip("# ").strip(), "derivation": "verbatim", "lines": [n, n],
+            {"kind": "semantic", "text": first.lstrip("# ").strip(), "derivation": "verbatim", "lines": [n, n],
              "concepts": ["睡眠テスト"], "confidence": 0.9,
              **({"evidence_lines": evidence_lines} if evidence_lines else {})}]}
     if t == "write_daily":

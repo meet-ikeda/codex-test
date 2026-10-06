@@ -49,12 +49,17 @@ AUTO_LOGGED_AIS = ("codex", "claude code")  # their conversations are read from 
 # in the cloud, where nothing is left on this Mac, so its /日報 is accepted)
 FALLBACK_KEEP = 0.6  # share of the recall budget the cortex keeps when records are looked up too
 
-ELEMENT_KINDS = ("episode", "semantic", "procedural")
+ELEMENT_KINDS = ("episode", "semantic", "procedural", "case")
+# Spec v0.8 §5.2 / §6: a judgment made once is a case (situation, decision, reason, reaction, when), not a rule.
+# Rules have a stage: tentative (grown from cases, not handed out at the start) -> confirmed (the owner said so,
+# or said "always ...") -> retired (the owner said no, or cases stopped fitting). Old rules have no stage yet.
+RULE_STAGES = ("tentative", "confirmed")
+CASE_FIELDS = ("situation", "decision", "reason", "reaction", "when")
 # A light ontology (2026-09-30): what kind of thing a concept is, and its other names. Few types on purpose;
 # add one only when real memories need it.
 CONCEPT_TYPES = {"person": "人", "organization": "会社・組織", "project": "案件", "tool": "道具・サービス",
                  "place": "場所", "topic": "話題"}
-KIND_LABEL_JA = {"episode": "出来事", "semantic": "知識", "procedural": "ルール", "concept": "概念"}
+KIND_LABEL_JA = {"episode": "出来事", "semantic": "知識", "procedural": "ルール", "concept": "概念", "case": "事例"}
 
 PROJECTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
@@ -276,7 +281,8 @@ class Brain:
                 self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
         for col, decl in (("promoted_by", "TEXT"), ("derivation", "TEXT"), ("confidence", "REAL"),
                           ("occurrences", "INTEGER NOT NULL DEFAULT 1"), ("goods", "INTEGER NOT NULL DEFAULT 0"),
-                          ("about", "TEXT"), ("subject", "TEXT"), ("concept_type", "TEXT")):
+                          ("about", "TEXT"), ("subject", "TEXT"), ("concept_type", "TEXT"),
+                          ("scope", "TEXT"), ("stage", "TEXT"), ("case_json", "TEXT")):
             if col not in cols:
                 self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {decl}")
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(sources)")}
@@ -374,7 +380,10 @@ class Brain:
                       (p["id"], ev.at, p["old_body"], p["new_body"], p["reason"], p.get("episode_id"),
                        p.get("source_id"), ev.actor))
         elif ev.type == "hippocampus_entered":
-            c.execute("INSERT OR IGNORE INTO hippocampus (source_id, entered_at, expires_at) VALUES (?, ?, ?)",
+            # Entering again (repromote, spec v0.8 §11.3) puts it back to waiting with a new expiry.
+            c.execute("INSERT INTO hippocampus (source_id, entered_at, expires_at) VALUES (?, ?, ?)"
+                      " ON CONFLICT (source_id) DO UPDATE SET entered_at = excluded.entered_at,"
+                      " expires_at = excluded.expires_at, status = 'waiting'",
                       (p["source_id"], ev.at, p["expires_at"]))
         elif ev.type == "hippocampus_faded":
             c.executemany("UPDATE hippocampus SET status = 'faded' WHERE source_id = ? AND status = 'waiting'",
@@ -386,6 +395,9 @@ class Brain:
                       (p["key"], p["source"], p["thread_id"], p["cursor"], p.get("entry_date"), p.get("source_id"),
                        ev.at))
         elif ev.type == "node_added":
+            extra_cols = {k: p[k] for k in ("scope", "stage") if p.get(k)}
+            if p.get("case"):
+                extra_cols["case_json"] = events.canonical_json(p["case"])
             c.execute(
                 "INSERT INTO nodes (id, kind, label, body, norm, source_id, created_by, created_at, importance,"
                 " promoted_by, derivation, confidence, about, subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -393,6 +405,9 @@ class Brain:
                  ev.actor, ev.at, p.get("importance", 0.5), p.get("promoted_by"), p.get("derivation"),
                  p.get("confidence"), p.get("about"), p.get("subject")),
             )
+            if extra_cols:
+                c.execute(f"UPDATE nodes SET {', '.join(f'{k} = ?' for k in extra_cols)} WHERE id = ?",
+                          (*extra_cols.values(), p["id"]))
         elif ev.type == "edge_set":
             c.execute(
                 "INSERT INTO edges (src, dst, kind, weight, co_activations, last_reinforced_at, origin)"
@@ -420,7 +435,7 @@ class Brain:
             c.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (ev.at, p["session_id"]))
         elif ev.type == "node_updated":
             sets, args = [], []
-            for col in ("base_strength", "pinned", "status", "importance"):
+            for col in ("base_strength", "pinned", "status", "importance", "stage", "scope"):
                 if col in p:
                     sets.append(f"{col} = ?")
                     args.append(p[col])
@@ -460,6 +475,9 @@ class Brain:
             c.execute("INSERT INTO sleep_marks (kind, key, value, at) VALUES (?, ?, ?, ?)"
                       " ON CONFLICT (kind, key) DO UPDATE SET value = excluded.value, at = excluded.at",
                       (p["kind"], p["key"], p.get("value", 0), ev.at))
+        elif ev.type == "sleep_marks_cleared":
+            c.executemany("DELETE FROM sleep_marks WHERE kind = ? AND key LIKE ?",
+                          [(p["kind"], f"{sid}:%") for sid in p["source_ids"]])
         elif ev.type == "sleep_started":
             c.execute("INSERT INTO sleep_runs (id, started_at, start_event, stage_a) VALUES (?, ?, ?, ?)",
                       (p["id"], ev.at, p.get("from_event", ev.id), events.canonical_json(p["stage_a"])))
@@ -644,10 +662,46 @@ class Brain:
             "SELECT id FROM sources WHERE sha256 = ?", (body_sha256(body),)).fetchone()[0]
         with self._tx():
             created = self._add_elements(actor, [element], source_id, promoted_by="explicit",
-                                         extra={"derivation": "verbatim", "confidence": 1.0})
+                                         extra={"derivation": "verbatim", "confidence": 1.0,
+                                                **({"stage": "confirmed"} if kind == "procedural" else {})})
             self._emit(actor, "node_sourced", {"node_id": created[0]["id"], "source_id": source_id,
                                                "line_start": 1, "line_end": 1, "quote": words})
         return {"node_id": created[0]["id"], "source_id": source_id, "already_remembered": False}
+
+    def review_rule(self, rule_id: str, verdict: str, owner_words: str = "", actor: str = "human") -> dict[str, Any]:
+        """The owner's answer to a rule (spec v0.8 §6.1): "yes" makes a tentative rule a confirmed one,
+        "no" takes a rule out (its cases and history stay). Only the owner's own answer may do this."""
+        n = self.node(rule_id)
+        if n is None or n["kind"] != "procedural" or n["status"] != "active":
+            raise InvalidInput(f"{rule_id} は、今あるルールではありません。")
+        if verdict not in ("yes", "no"):
+            raise InvalidInput("verdict は 'yes'（そのとおり）か 'no'（違う）です。")
+        with self._tx():
+            if verdict == "yes":
+                self._emit(actor, "node_updated", {"id": rule_id, "stage": "confirmed",
+                                                   "importance": round(max(n["importance"], 0.8), 3)})
+            else:
+                self._emit(actor, "node_updated", {"id": rule_id, "status": "retired"})
+            self._emit(actor, "sleep_mark", {"kind": "rule_reviewed", "key": rule_id,
+                                             "value": 1 if verdict == "yes" else 0})
+        self._recaller.index.version = -1
+        what = "ルールにしました（会話の最初に渡します）" if verdict == "yes" else "ルールから外しました（元の事例と履歴は残ります）"
+        return {"rule_id": rule_id, "verdict": verdict, "owner_words": owner_words,
+                "message_to_user": f"「{n['body']}」を{what}。"}
+
+    def rules_to_review(self, limit: int = 20) -> list[dict]:
+        """Tentative rules waiting for the owner's answer, newest first, with the cases they came from."""
+        rows = self._conn.execute(
+            "SELECT id, body, scope, created_at FROM nodes WHERE kind = 'procedural' AND status = 'active'"
+            " AND stage = 'tentative' ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in rows:
+            cases = [c[0] for c in self._conn.execute(
+                "SELECT n.body FROM edges e JOIN nodes n ON n.id = e.dst WHERE e.src = ? AND e.kind = 'derived_from'"
+                " AND n.kind = 'case'", (r["id"],))]
+            out.append({"id": r["id"], "text": r["body"], "scope": r["scope"] or "", "created_at": r["created_at"],
+                        "cases": cases})
+        return out
 
     def good(self, session_id: str, praised: str, owner_words: str = "/good",
              used_memory_ids: list[str] | None = None, concepts: list[str] | None = None) -> dict[str, Any]:
@@ -677,7 +731,8 @@ class Brain:
                 nid = existing[0]
             else:
                 nid = self._add_elements(actor, [element], source_id, promoted_by="explicit",
-                                         extra={"derivation": "paraphrase", "confidence": 0.9})[0]["id"]
+                                         extra={"derivation": "paraphrase", "confidence": 0.9,
+                                                "stage": "tentative"})[0]["id"]
             self._emit(actor, "node_updated", {"id": nid, "goods_delta": 1})
             if source_id:
                 self._emit(actor, "node_sourced", {"node_id": nid, "source_id": source_id, "line_start": 1,
@@ -829,11 +884,13 @@ class Brain:
         return {"filed": True, **result, "message": "日報を預かりました。今夜の睡眠で、覚えるべきものが大脳皮質に移ります。"}
 
     def profile(self, budget: int) -> str:
-        """The owner's standing rules and key facts, strongest first, within a token budget."""
+        """What every conversation starts with (spec v0.8 §8.1): the confirmed rules that hold for all work,
+        strongest first, within a token budget. Cases, tentative rules and one project's memories come up only
+        when the talk turns to them (recall)."""
         rows = self._conn.execute(
-            "SELECT id, kind, body FROM nodes WHERE status = 'active' AND kind IN ('procedural', 'semantic')"
-            " ORDER BY pinned DESC, CASE kind WHEN 'procedural' THEN 0 ELSE 1 END,"
-            " importance * base_strength DESC, access_count DESC, created_at DESC"
+            "SELECT id, kind, body FROM nodes WHERE status = 'active' AND kind = 'procedural'"
+            " AND (pinned = 1 OR (stage = 'confirmed' AND COALESCE(scope, '') = ''))"
+            " ORDER BY pinned DESC, importance * base_strength DESC, access_count DESC, created_at DESC"
         )
         lines, used = [], 0
         for r in rows:

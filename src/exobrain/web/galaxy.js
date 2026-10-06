@@ -8,7 +8,7 @@
 "use strict";
 
 (function () {
-  const SHAPE = { semantic: 0, procedural: 1, episode: 2, dust: 2, concept: 3 };
+  const SHAPE = { semantic: 0, procedural: 1, episode: 2, case: 2, dust: 2, concept: 3 };
 
   const POINT_VS = `
     attribute vec2 a_pos; attribute float a_size; attribute float a_alpha; attribute float a_phase;
@@ -167,8 +167,8 @@
           push(n.x, n.y, 5 + Math.min(4, n.size * 0.3), dormant ? 0.2 : 0.45, r(), SHAPE.concept, 0, i);
           return;
         }
-        const core = n.kind === "procedural" ? 3.6 + n.size * 0.26 : n.kind === "episode" ? 4 + n.size * 0.4 : 1.4 + n.size * 0.2;
-        push(n.x, n.y, core * few, dormant ? 0.22 : n.kind === "episode" ? 0.6 : n.kind === "procedural" ? 0.7 : 0.85, r(), SHAPE[n.kind], 0, i);
+        const core = n.kind === "procedural" ? 3.6 + n.size * 0.26 : (n.kind === "episode" || n.kind === "case") ? 4 + n.size * 0.4 : 1.4 + n.size * 0.2;
+        push(n.x, n.y, core * few, dormant ? 0.22 : (n.kind === "episode" || n.kind === "case") ? 0.6 : n.kind === "procedural" ? 0.7 : 0.85, r(), SHAPE[n.kind], 0, i);
         // Haze: a few large, faint motes; where memories gather they add up to a nebula.
         if (i % hazeEvery === 0) {
           const k = Math.sqrt(hazeEvery); // fewer motes, each a little stronger

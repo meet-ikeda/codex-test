@@ -2,13 +2,14 @@
 "use strict";
 
 const TOKEN = document.body.dataset.token;
-const KIND_JA = { episode: "出来事", semantic: "知識", procedural: "ルール", concept: "概念" };
-const KIND_EN = { episode: "Episode", semantic: "Knowledge", procedural: "Rule", concept: "Concept" };
+const KIND_JA = { episode: "出来事", semantic: "知識", procedural: "ルール", concept: "概念", case: "事例" };
+const KIND_EN = { episode: "Episode", semantic: "Knowledge", procedural: "Rule", concept: "Concept", case: "Case" };
+const STAGE_JA = { tentative: "仮のルール（オーナーの確認待ち）", confirmed: "本決まりのルール" };
 const SOURCE_KIND = { memo: "Your note", daily_report: "AI report", dream: "Dream journal", ai_daily: "AI daily log",
   remember_note: "#remember note", explicit: "Remember this", good: "/good" };
 const SOURCE_JA = { memo: "メモ", daily_report: "AI の報告（旧）", dream: "夢日記", ai_daily: "AI 日報",
   remember_note: "#remember", explicit: "覚えておいて", good: "/good" };
-const PROMOTED_JA = { explicit: "明示", demand: "前にも言った", repetition: "反復", association: "連想",
+const PROMOTED_JA = { summarized: "要約", grown: "事例から", explicit: "明示", demand: "前にも言った", repetition: "反復", association: "連想",
   reconsolidation: "書き換えの経緯として" };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const $ = (sel) => document.querySelector(sel);
@@ -112,7 +113,7 @@ async function loadMeta() {
   await guarded(async () => {
     const [s, z] = await Promise.all([api("/api/safety"), api("/api/sleep")]);
     const st = s.stats;
-    $("#m-nodes").textContent = pad(st.episode + st.semantic + st.procedural);
+    $("#m-nodes").textContent = pad(st.episode + st.semantic + st.procedural + (st.case || 0));
     $("#m-edges").textContent = pad(st.edges);
     $("#m-sources").textContent = pad(st.sources);
     $("#m-sleep").textContent = z.last_sleep ? when(z.last_sleep) : "—";
@@ -351,7 +352,7 @@ async function selectNode(id) {
   await guarded(async () => renderDetail(await api(`/api/node/${encodeURIComponent(id)}`)));
 }
 
-function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes = [] }) {
+function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes = [], case: kase = null, derived_from = [] }) {
   const parts = [
     el("button", { class: "close", on: { click: clearSelection } }, "Close ×"),
     el("p", { class: "room" }, node.kind === "concept" ? "Concept" : KIND_EN[node.kind]),
@@ -364,7 +365,27 @@ function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes
       `${who(node.created_by)}, ${when(node.created_at)}`,
       node.pinned ? [el("br"), "毎回必ず思い出すルール（Pinned）"] : null,
       node.status === "dormant" ? [el("br"), "眠っている記憶（Dormant）"] : null,
-      node.status === "superseded" ? [el("br"), "置き換え済み（Superseded）"] : null));
+      node.status === "superseded" ? [el("br"), "置き換え済み（Superseded）"] : null,
+      node.status === "retired" ? [el("br"), "外したルール・作り直し前の記憶（Retired）"] : null,
+      node.kind === "procedural" && node.status === "active"
+        ? [el("br"), STAGE_JA[node.stage] || "未整理のルール（以前の入れ方で入ったもの）"] : null,
+      node.scope ? [el("br"), `${node.scope} の中だけ（Scope）`] : null));
+    if (kase) {
+      const rows = [["状況", kase.situation], ["判断", kase.decision], ["理由", kase.reason || "（オーナーは言っていない）"],
+        ["反応", kase.reaction || "—"], ["時期", kase.when]];
+      parts.push(el("div", { class: "section-title" }, cap("Case — 事例")));
+      for (const [k, v] of rows) parts.push(el("p", { class: "hint" }, `${k}: ${v || "—"}`));
+    }
+    if (node.kind === "procedural" && node.stage === "tentative" && node.status === "active") {
+      const answer = (verdict) => guarded(async () => {
+        const r = await api("/api/rule/review", { id: node.id, verdict });
+        toast(r.message_to_user);
+        await selectNode(node.id);
+      });
+      parts.push(el("p", {},
+        el("button", { class: "link cap", on: { click: () => answer("yes") } }, "そう（ルールにする）"), " / ",
+        el("button", { class: "link cap", on: { click: () => answer("no") } }, "違う（外す）")));
+    }
     const facts = [["Recalled", pad(node.access_count, 2)], ["Strength", node.base_strength.toFixed(1)],
       ["Importance", node.importance.toFixed(1)], ["Corrected", pad(node.corrections, 2)],
       ["Links", pad(neighbors.length, 2)], ["Last recall", node.last_activated_at ? when(node.last_activated_at, false) : "—"]];
@@ -379,6 +400,11 @@ function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes
     parts.push(el("div", { class: "section-title" }, cap("Evidence — 根拠の引用"), cap(pad(quotes.length, 2))));
     for (const q of quotes) parts.push(el("blockquote", { class: "quote" }, q.quote,
       el("button", { class: "link cap", on: { click: () => openSource(q.source_id) } }, `${when(q.created_at, false)} — ${q.title}`)));
+  }
+  if (derived_from.length) {
+    parts.push(el("div", { class: "section-title" }, cap("Grown from — 元の事例"), cap(pad(derived_from.length, 2))));
+    for (const d of derived_from) parts.push(el("div", { class: "nbr", on: { click: () => focusNode(d.id) } },
+      glyph("case"), el("span", { class: "t" }, (d.link === "contradicted_by" ? "合わなかった: " : "") + d.body)));
   }
   if (revisions.length) {
     parts.push(el("div", { class: "section-title" }, cap("Rewritten — 書き換えの履歴"), cap(pad(revisions.length, 2))));
@@ -535,11 +561,14 @@ async function loadBrain() {
     const EMPTY = { procedural: "まだありません。注意されたこと・好み・やり方がここに入ります。",
       semantic: "まだありません。決定や事実がここに入ります。", episode: "まだありません。出来事や、記憶を書き換えた経緯がここに入ります。" };
     for (const kind of ["procedural", "semantic", "episode"]) {
-      const mem = b.cortex.memories.filter((n) => n.kind === kind);
+      const mem = b.cortex.memories.filter((n) => n.kind === kind || (kind === "episode" && n.kind === "case"));
       $(`#n-${kind}`).textContent = ` ${k[kind]}`;
       $(`#l-${kind}`).replaceChildren(...(mem.length ? mem.map((n) => {
         const ABOUT = { client: "クライアント", interviewee: "取材相手", other: "他の人" };
-        const bits = [n.about && n.about !== "owner" ? `${ABOUT[n.about] || n.about}${n.subject ? `（${n.subject}）` : ""}の話` : null,
+        const bits = [n.kind === "case" ? "事例" : null,
+          n.kind === "procedural" ? (n.stage === "tentative" ? "仮のルール" : n.stage === "confirmed" ? null : "未整理") : null,
+          n.scope ? `${n.scope} の中だけ` : null,
+          n.about && n.about !== "owner" ? `${ABOUT[n.about] || n.about}${n.subject ? `（${n.subject}）` : ""}の話` : null,
           n.promoted_by ? `${PROMOTED_JA[n.promoted_by] || n.promoted_by}で記憶` : null,
           n.goods ? `褒められた ${n.goods}` : null, n.corrections ? `注意された ${n.corrections}` : null,
           n.occurrences > 1 ? `再登場 ${n.occurrences}` : null, n.revisions ? `書き換え ${n.revisions}` : null,

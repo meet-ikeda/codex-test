@@ -1,11 +1,17 @@
 """Sleep A: promote from the hippocampus to the cortex (spec v0.5 §6.2, OUTBRAIN v0.4 §5).
 
 The AI does not decide what is important. A passage is a candidate only when a
-signal says so:
-- explicit:   the owner's own notes (#remember, memos) and, in AI daily logs, the
-              sections "決まったこと", "注意・訂正されたこと" and "オーナーのこだわり・理由"
+signal says so (spec v0.8 §7.2):
+- explicit:   the owner's own words: #remember notes and memos, the owner's-words sections of daily logs and
+              deposits ("オーナーの言葉", "こだわり・理由")
+- summarized: what an AI summed up from a conversation the owner had: the other kept sections of daily logs
+              ("決まったこと", "ボツになったこと", "前提・条件", ...) and the rest of a deposit. One step weaker.
 - repetition: something close to it appears in another original from another day
 Anything else stays on the bookshelf.
+
+A judgment made once becomes a case (situation, decision, reason, reaction, when), not a rule. A rule enters
+here only when the owner's own words say it holds generally ("いつも", "毎回", "今後" ...); rules otherwise grow
+from cases during sleep (sleep.grow items, spec v0.8 §6).
 
 The AI splits a candidate into atoms and answers with line numbers only; the
 quote is cut from the original by this module and must match it. An atom that
@@ -27,17 +33,23 @@ if TYPE_CHECKING:
     from .brain import Brain
 
 EXPLICIT_KINDS = ("remember_note", "memo", "deposit")  # the owner handed these over on purpose
-DAILY_EXPLICIT_SECTIONS = ("決まったこと", "注意・訂正されたこと", "オーナーのこだわり・理由",  # log v1
-                           "ボツになったこと", "前提・条件", "オーナーの言葉")  # log v2 (docs/daily-log-rules.md)
+OWNER_WORDS_SECTIONS = ("オーナーの言葉", "オーナーのこだわり・理由", "こだわり・理由（オーナー本人の言葉）")
+DAILY_KEPT_SECTIONS = ("決まったこと", "注意・訂正されたこと", "ボツになったこと", "前提・条件")  # AI-summarized
+DAILY_EXPLICIT_SECTIONS = OWNER_WORDS_SECTIONS + DAILY_KEPT_SECTIONS  # every section that is a candidate at all
 ATOMS_PER_SEGMENT = 5
 ATOMS_PER_OWNER_SEGMENT = 8  # the owner's own notes are dense and were marked on purpose (2026-09-27)
 SIMILAR_SHOWN = 8
 REPEAT_SIM = 0.80  # bge-m3 cosine for "the same thing said again" — provisional, check on real logs
-IMPORTANCE = {"explicit": 1.0, "demand": 0.8, "repetition": 0.6, "association": 0.4}  # OUTBRAIN v0.4 §7.2 "I"
+IMPORTANCE = {"explicit": 1.0, "demand": 0.8, "summarized": 0.7, "repetition": 0.6, "association": 0.4}  # OUTBRAIN v0.4 §7.2 "I"
 DERIVATIONS = ("verbatim", "paraphrase", "inferred")
 NOTHING = ("特になし", "なし", "")
 WIKILINK = re.compile(r"\[\[([^\]\n]+?)\]\]")  # [[A社]] / [[A社|A社様]]: a name marked by whoever wrote the note
 KNOWN_CONCEPTS_SHOWN = 20
+SCOPE_MAX = 40
+# The owner saying a rule holds in general. Without these, a judgment is a case (spec v0.8 §6.1).
+GENERAL_WORDS = re.compile(r"いつも|毎回|常に|今後|これから(は|も)|必ず|絶対|どの.{0,8}でも|基本(的に)?は|原則|二度と|"
+                           r"覚えて(おいて|て)|ルールに(して|する)|ずっと")
+PROJECT_LINE = re.compile(r'^案件:\s*"?\[\[(.+?)\]\]', re.M)
 # The day something was said: an AI daily log's entry_date, otherwise the day it was filed.
 _DAY = "COALESCE(json_extract(meta_json, '$.entry_date'), substr(created_at, 1, 10))"
 
@@ -82,7 +94,8 @@ def candidates(brain: Brain, done: set[str]) -> Iterator[tuple[Segment, str]]:
     c = brain._conn
     rows = c.execute(
         "SELECT s.id, s.kind, s.path FROM sources s JOIN hippocampus h ON h.source_id = s.id"
-        " WHERE h.status = 'waiting' AND s.erased = 0 ORDER BY s.created_at").fetchall()
+        # What fades soonest goes first: a rebuild's originals wait 90 days, a new log only 7.
+        " WHERE h.status = 'waiting' AND s.erased = 0 ORDER BY h.expires_at, s.created_at").fetchall()
     for r in rows:
         path = brain.settings.drive_root / r["path"]
         if not path.exists():
@@ -91,13 +104,17 @@ def candidates(brain: Brain, done: set[str]) -> Iterator[tuple[Segment, str]]:
         lines = _lines(body)
         segs: list[Segment] = []
         if r["kind"] in EXPLICIT_KINDS:
-            for ch in c.execute("SELECT line_start, line_end FROM chunks WHERE source_id = ? ORDER BY idx", (r["id"],)):
-                segs.append(Segment(r["id"], ch[0], ch[1], "explicit"))
+            for ch in c.execute("SELECT line_start, line_end, heading FROM chunks WHERE source_id = ? ORDER BY idx",
+                                (r["id"],)):
+                # A deposit is an AI's summary, except its owner's-words section; memos are the owner's own.
+                summed = r["kind"] == "deposit" and not any(h in (ch[2] or "") for h in OWNER_WORDS_SECTIONS)
+                segs.append(Segment(r["id"], ch[0], ch[1], "summarized" if summed else "explicit"))
         elif r["kind"] == "ai_daily":
             for heading, a, b in _daily_sections(body):
                 if b < a:
                     continue
-                signal = "explicit" if heading in DAILY_EXPLICIT_SECTIONS else None
+                signal = ("explicit" if heading in OWNER_WORDS_SECTIONS
+                          else "summarized" if heading in DAILY_KEPT_SECTIONS else None)
                 content = "\n".join(lines[a - 1 : b])
                 # Compared the way sections are chunked and embedded: heading line and all.
                 if signal is None and _meaningful(content) and _repeated(brain, r["id"], "\n".join(lines[a - 2 : b])):
@@ -186,6 +203,18 @@ LINK_RULE = ("原文の [[名前]] は、書いた人が印を付けた固有名
              "concepts は {name, type} で返す。type: person（人）/ organization（会社・組織）/ project（案件）/ "
              "tool（道具・サービス）/ place（場所）/ topic（話題）。known_concepts にある話題と同じものは、"
              "その name をそのまま使う（表記を変えない）。原子の text には [[ ]] を書かない。")
+KIND_RULE = (
+    "kind: case（事例: 1 回の判断。状況・判断・理由・反応・時期のまとまり）/ semantic（事実・決まったこと・オーナーの考え）/ "
+    "episode（出来事・発言）/ procedural（ルール）。"
+    "1 回の判断はルールにしない。必ず case にする（例: ある LP の見出しを体言止めにした → case）。"
+    "procedural にしてよいのは、オーナー自身の言葉が「いつも」「毎回」「今後」「どの〜でも」などで、"
+    "広く当てはまると言っているときだけ（その行を lines に含める）。"
+    "case には case: {situation（いつ・何の仕事か・誰に向けたか・何を目指したか）, decision（選んだこと）, "
+    "reason（オーナーが言った理由。言っていなければ空）, reaction（採った・直した・後で変えた。わからなければ空）} を付ける。"
+    "「言ったはずです」などの発言そのものや、その時だけの決まりは episode か semantic にする。")
+SCOPE_RULE = (
+    "scope: その記憶が当てはまる範囲。空ならどの仕事にも当てはまる。案件・クライアント・場面（開発・コピーなど）の中だけなら"
+    "その名前（40 文字以内）。迷ったら狭くする。この資料の案件: {project}。")
 PERSONAL_INFO_RULE = ("電話番号・住所・メールアドレス・口座などの個人情報や、パスワード・鍵は、原子に書かない。")
 DEPOSIT_HINT = ("これはオーナーが預けると決めた会話を、その会話の AI がまとめたもの。見出しの種類（手続き・意味・"
                 "エピソード）は目安で、中身に合わせて kind を決めてよい。オーナーの仕事の状況や考えも semantic として拾う。")
@@ -204,6 +233,11 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
     meta_row = brain._conn.execute("SELECT meta_json FROM sources WHERE id = ?", (seg.source_id,)).fetchone()[0]
     meta = json.loads(meta_row) if meta_row else {}
     note_type, subject = meta.get("note_type"), meta.get("subject")
+    project = ""
+    if s["kind"] == "ai_daily":
+        path = brain._conn.execute("SELECT path FROM sources WHERE id = ?", (seg.source_id,)).fetchone()[0]
+        m = PROJECT_LINE.search(read_body(brain.settings.drive_root / path)[:3000])
+        project = m.group(1).split("|")[0].strip() if m and m.group(1).strip() != "なし" else ""
     evidence = None
     evidence_source_id = meta.get("conversation_source_id") if s["kind"] == "ai_daily" else None
     if evidence_source_id:
@@ -247,9 +281,9 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
             NOTE_TYPE_HINT.get(note_type, "") + (f"（この話の相手: {subject}）" if subject else "")
             + (DEPOSIT_HINT if s["kind"] == "deposit" else OWNER_NOTE_HINT if owner_note and not note_type else "")
             + f"この部分を、長く覚えておく価値のある「記憶の原子」に分ける（最大 {limit} 個。価値がなければ atoms を空に）。"
-            "1 原子 = 1 つの決定・事実・ルール・好み・出来事。原子は単独で意味が通る 1 文（300 文字以内）にする。"
-            "kind: procedural（やり方・ルール・好み・注意されたこと）/ semantic（事実・決定）/ episode（出来事）。"
-            + REASON_RULE +
+            "記憶の主語はオーナー。原子は単独で意味が通る 1 文（300 文字以内）で、次に役立つ形に言い直す"
+            "（言葉を変えないのはオーナーの言葉だけ。口調や言い方の強さは episode の側にだけ残す）。"
+            + KIND_RULE + SCOPE_RULE.format(project=project or "なし") + REASON_RULE +
             "derivation: verbatim（原文のまま）/ paraphrase（意味を変えずに整理）/ inferred（原文に直接はない推論）。"
             "lines: 日報内の根拠行 [開始, 終了]（lines にある番号だけ）。引用は書かない（プログラムが切り出す）。"
             + ("evidence は日報の元になった会話抜粋。各原子について、内容を裏づける連続した原会話の"
@@ -262,6 +296,7 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
             "owner 以外なら subject に誰か（会社名・人名・役割）を入れ、text の主語にもする。"
             + PERSONAL_INFO_RULE + "迷ったら統合しない。書かれていないことを足さない。"),
         "max_atoms": limit, **({"note_type": note_type} if note_type else {}),
+        **({"project": project} if project else {}),
         **({"evidence": evidence} if evidence else {}),
     }
 
@@ -329,6 +364,10 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
         quote = "\n".join(body_lines[n] for n in range(ln[0], ln[1] + 1)).strip()
         if not quote:
             raise InvalidInput(f"atoms[{i}].lines の範囲が空行だけです。")
+        if kind == "procedural" and not (item["signal"] == "explicit" and GENERAL_WORDS.search(quote)):
+            raise InvalidInput(f"atoms[{i}] は 1 回の判断なので、procedural ではなく case にしてください"
+                               "（ルールにしてよいのは、オーナー自身の言葉が「いつも」「今後」などで広く当てはまると"
+                               "言っているときだけ。その行を lines に含める）。")
         evidence_range, evidence_quote = None, None
         if evidence:
             evidence_range = a.get("evidence_lines")
@@ -374,10 +413,22 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
         if about not in ABOUTS:
             raise InvalidInput(f"atoms[{i}].about は {', '.join(ABOUTS)} のいずれかです。")
         subject = " ".join(str(a.get("subject") or "").split())[:40] or None
+        scope = " ".join(str(a.get("scope") or "").split()).strip("[]")[:SCOPE_MAX]
+        case = None
+        if kind == "case":
+            raw = a.get("case") if isinstance(a.get("case"), dict) else {}
+            case = {k: " ".join(str(raw.get(k) or "").split())[:200] for k in ("situation", "decision", "reason",
+                                                                                 "reaction")}
+            if not case["decision"]:
+                raise InvalidInput(f"atoms[{i}].case.decision（そのとき選んだこと）を書いてください。")
+            case["when"] = item["source"]["date"]
+            if not scope and item.get("project"):
+                scope = item["project"]  # a case belongs to its project unless said otherwise
         if about != "owner" and not subject and item.get("note_type"):
             raise InvalidInput(f"atoms[{i}] は {about} の話なので、subject に誰か（名前か役割）を入れてください。")
         out.append({"kind": kind, "text": text, "derivation": der, "lines": ln, "quote": quote,
-                    "confidence": round(conf, 3), "concepts": concepts, "concept_meta": concept_meta, "about": about, "subject": subject,
+                    "confidence": round(conf, 3), "concepts": concepts, "concept_meta": concept_meta, "about": about,
+                    "scope": scope, "case": case, "subject": subject,
                     "same_as": a.get("same_as"), "supersedes": a.get("supersedes"),
                     "evidence_lines": evidence_range, "evidence_quote": evidence_quote})
     return out
@@ -410,7 +461,11 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
         created = brain._add_elements(
             actor, [Element(a["kind"], a["text"], a["concepts"], IMPORTANCE[item["signal"]], a.get("concept_meta") or {})], src,
             promoted_by=item["signal"], extra={"derivation": a["derivation"], "confidence": a["confidence"],
-                                               "about": a["about"], **({"subject": a["subject"]} if a["subject"] else {})})
+                                               "about": a["about"], **({"subject": a["subject"]} if a["subject"] else {}),
+                                               **({"scope": a["scope"]} if a.get("scope") else {}),
+                                               **({"case": a["case"]} if a.get("case") else {}),
+                                               # the owner said it holds generally (validated above)
+                                               **({"stage": "confirmed"} if a["kind"] == "procedural" else {})})
         nid = created[0]["id"]
         brain._emit(actor, "node_sourced", {"node_id": nid, "source_id": src, "line_start": a["lines"][0],
                                             "line_end": a["lines"][1], "quote": a["quote"]})

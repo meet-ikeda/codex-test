@@ -51,6 +51,8 @@ class App:
         c = self.brain._conn
         kinds = [k for k in (q.get("kinds") or "episode,semantic,procedural").split(",")
                  if k in ("episode", "semantic", "procedural")]
+        if "episode" in kinds:
+            kinds.append("case")  # a case is an episodic memory (spec v0.8 §5.1), shown with the episodes
         statuses = ["active", "dormant"] if q.get("dormant") == "1" else ["active"]
         sql = (f"SELECT rowid AS no, id, kind, label, status, pinned, base_strength, access_count, created_at,"
                f" created_by, source_id"
@@ -154,7 +156,11 @@ class App:
         return {"node": {"no": no, **{k: n[k] for k in ("id", "kind", "label", "body", "status", "pinned",
                                                         "corrections", "importance", "base_strength",
                                                         "access_count", "created_at", "created_by",
-                                                        "last_activated_at")}},
+                                                        "last_activated_at", "stage", "scope")},
+                         "case": json.loads(n["case_json"]) if n["case_json"] else None},
+                "derived_from": [dict(r) for r in b._conn.execute(
+                    "SELECT x.id, x.body, e.kind AS link FROM edges e JOIN nodes x ON x.id = e.dst"
+                    " WHERE e.src = ? AND e.kind IN ('derived_from', 'contradicted_by')", (node_id,))],
                 "neighbors": nbrs[:40], "source": source, "shelves": shelves,
                 "revisions": [dict(r) for r in b._conn.execute(
                     "SELECT at, old_body, new_body, reason, episode_id, source_id, actor FROM revisions"
@@ -294,18 +300,19 @@ class App:
                               "days_total": b.settings.hippocampus_days,
                               "signals": sorted(waiting_signals.get(r["id"], set())),
                               "memories": r["memories"], "chunks": r["chunks"]})
-            kinds = {k: c.execute("SELECT COUNT(*) FROM nodes WHERE kind = ? AND status = 'active'", (k,)).fetchone()[0]
-                     for k in ("procedural", "semantic", "episode")}
+            kinds = {k: c.execute("SELECT COUNT(*) FROM nodes WHERE kind IN (?, ?) AND status = 'active'",
+                                  (k, "case" if k == "episode" else k)).fetchone()[0]
+                     for k in ("procedural", "semantic", "episode")}  # cases sit in the episode box (spec v0.8 §5.1)
             memories = []
             for k in ("procedural", "semantic", "episode"):  # each box shows its strongest
                 memories += [dict(r) for r in c.execute(
                     "SELECT n.id, n.kind, n.body, n.promoted_by, n.importance, n.base_strength, n.goods, n.corrections,"
-                    " n.about, n.subject,"
+                    " n.about, n.subject, n.stage, n.scope,"
                     " n.occurrences, n.pinned, n.created_at, n.access_count,"
                     " (SELECT COUNT(*) FROM revisions r WHERE r.node_id = n.id) AS revisions"
-                    " FROM nodes n WHERE n.status = 'active' AND n.kind = ?"
+                    " FROM nodes n WHERE n.status = 'active' AND (n.kind = ? OR (? = 'episode' AND n.kind = 'case'))"
                     " ORDER BY n.pinned DESC, n.importance * n.base_strength + 0.1 * n.goods + 0.1 * n.corrections DESC,"
-                    " n.created_at DESC LIMIT 20", (k,))]
+                    " n.created_at DESC LIMIT 20", (k, k))]
             shelf = {r[0]: r[1] for r in c.execute("SELECT kind, COUNT(*) FROM sources WHERE erased = 0 GROUP BY kind")}
             flow = {
                 "received": c.execute("SELECT COUNT(*) FROM sources WHERE created_at >= ? AND kind != 'dream'",
@@ -377,6 +384,8 @@ class App:
             return r or {"duplicate": True}
         if path == "/api/sleep":
             return self.start_sleep(bool(body.get("use_ai", True)))
+        if path == "/api/rule/review":  # the owner's yes / no on a tentative rule (spec v0.8 §6.1)
+            return self.brain.review_rule(str(body.get("id") or ""), str(body.get("verdict") or ""), "", "human")
         if path == "/api/sleep/timer":
             return self.set_timer(body)
         if path == "/api/backfill":
