@@ -190,14 +190,24 @@ def test_the_same_thing_again_adds_evidence_instead_of_a_new_memory(brain, sessi
 
 
 def test_daily_log_sections_decide_what_is_a_candidate(brain, session):
-    brain.submit_daily_log(session, "相談", ["雑談した"], ["結論から書くよう注意された"], [], ["md は写し"], [])
+    """Spec v0.8 §3.4: the sleeping AI screens the log first; what happened is kept only if tied to attention."""
+    brain.submit_daily_log(session, "相談", ["雑談した", "ファイルを開いた"], ["結論から書くよう注意された"], [],
+                           ["md は写し"], [])
     run_id, _ = sleep.start(brain)
-    batch = sleep.next_batch(brain, sleep.SleepState(run_id))
+    state = sleep.SleepState(run_id)
+    batch = sleep.next_batch(brain, state)
+    assert [i["type"] for i in batch["items"]][:1] == ["screen"]  # nothing promoted before it is screened
+    screen_item = batch["items"][0]
+    ids = [line.split()[1][3:] for line in screen_item["log"].splitlines() if line.startswith("- id=")]
+    sleep.apply(brain, state, batch["batch_id"], [{"item_id": screen_item["item_id"], "decisions": [
+        {"id": ids[0], "label": "chatter", "why": "雑談"}, {"id": ids[1], "label": "drop", "why": "作業の記録"}]}])
+    batch = sleep.next_batch(brain, state)
     promoted = [i for i in batch["items"] if i["type"] == "promote"]
-    texts = ["\n".join(t for _, t in i["lines"]) for i in promoted]
-    assert len(promoted) == 2 and all(i["signal"] == "summarized" for i in promoted)  # an AI summed these up
-    assert any("注意された" in t for t in texts) and any("写し" in t for t in texts)
-    assert not any("雑談" in t for t in texts)  # events are promoted only when they repeat
+    signals = sorted(i["signal"] for i in promoted)
+    texts = "\n".join(t for i in promoted for _, t in i["lines"])
+    assert signals == ["chatter", "summarized", "summarized"]  # an AI summed up the owner's sections
+    assert "注意された" in texts and "写し" in texts and "雑談した" in texts
+    assert "ファイルを開いた" not in texts  # tied to nothing: left on the bookshelf only
 
 
 def test_no_lessons_are_made_without_the_owner(brain, session):

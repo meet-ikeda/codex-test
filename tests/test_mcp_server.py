@@ -53,7 +53,7 @@ def test_daily_log_goes_to_the_hippocampus_not_the_cortex(server, brain):
     assert {k: after[k] for k in ("episode", "semantic", "procedural")} == \
         {k: before[k] for k in ("episode", "semantic", "procedural")}
     h = brain._conn.execute("SELECT status FROM hippocampus WHERE source_id = ?", (r["source_id"],)).fetchone()
-    assert h["status"] == "waiting"
+    assert h["status"] == "arrived"  # in the receiving box until screening (spec v0.8 §3.4)
     body = call(server, "open_source", {"source_id": r["source_id"]})["body"]
     assert "outbrain_kind: ai_daily" in body and "- 大脳皮質の md は写し" in body and "## ボツになったこと\n\n- 特になし" in body
     # The second /日報 continues the first one's cursor.

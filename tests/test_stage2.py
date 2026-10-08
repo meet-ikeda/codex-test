@@ -231,6 +231,9 @@ def test_repetition_on_another_day_is_a_signal(tmp_path, monkeypatch):
         encode_pending(b)
         from exobrain.promote import candidates
 
+        with b._tx():  # logs filed before screening existed go straight to the hippocampus (the old path)
+            for (src,) in b._conn.execute("SELECT source_id FROM hippocampus").fetchall():
+                b._emit("test", "hippocampus_entered", {"source_id": src, "expires_at": "2999-01-01T00:00:00+00:00"})
         segs = [seg for seg, _ in candidates(b, set())]
         assert {seg.signal for seg in segs} == {"repetition"}
         assert len(segs) == 2  # each day's mention points at the other
@@ -543,10 +546,14 @@ def test_gemini_daily_without_cursors_is_filed_once_and_promotes_its_decisions(t
         assert len(added) == 1 and added[0]["kind"] == "ai_daily"  # the same content only once
         row = b._conn.execute("SELECT ai_name, title FROM sources").fetchone()
         assert row[0] == "Gemini" and row[1].startswith("AI日報 · 採用サイトの相談 · 20")  # date filled on arrival
+        from exobrain import screen
+
+        screen.run(b)  # the AI cannot be asked in tests: everything is let in
         run_id, _ = sleep.start(b)
         items = [i for i in sleep.next_batch(b, sleep.SleepState(run_id))["items"] if i["type"] == "promote"]
-        texts = ["\n".join(t for _, t in i["lines"]) for i in items]
-        assert len(items) == 1 and "社員の言葉" in texts[0]
+        decided = [i for i in items if i["signal"] == "summarized"]  # the AI could not screen: "what happened" too
+        texts = ["\n".join(t for _, t in i["lines"]) for i in decided]
+        assert len(decided) == 1 and "社員の言葉" in texts[0]
 
 
 def test_reasons_section_is_an_explicit_signal():

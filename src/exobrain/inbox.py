@@ -1,8 +1,9 @@
 """The receiving box (預かりBOX): everything the brain takes in (spec v0.5 §5).
 
 Whatever arrives — a memo, a #remember note from Obsidian, an AI daily log — is
-filed on the bookshelf verbatim, chunked for search, and enters the hippocampus
-to wait for sleep. Nothing here writes to the cortex.
+filed on the bookshelf verbatim and chunked for search, and waits here until screening
+(screen.py, spec v0.8 §3.4) lets what drew attention into the hippocampus. Nothing here
+writes to the cortex.
 
 Sources, in the order `ingest()` looks at them:
 - the receiving box folder on Google Drive (memos; AI daily logs, also in its AI日報/ subfolder)
@@ -71,9 +72,10 @@ def add_source(brain: Brain, *, kind: str, author: str, ai_name: str | None, tit
                 **({"origin_file": origin_file} if origin_file else {}), **({"meta": meta} if meta else {}),
             })
             if hippocampus and kind not in SKIP_KINDS_FOR_HIPPOCAMPUS:
+                # It waits in the receiving box until screening lets (part of) it into the hippocampus.
                 expires = datetime.now(timezone.utc) + timedelta(days=brain.settings.hippocampus_days)
-                brain._emit(actor, "hippocampus_entered", {"source_id": source_id,
-                                                           "expires_at": expires.isoformat(timespec="seconds")})
+                brain._emit(actor, "source_arrived", {"source_id": source_id,
+                                                      "expires_at": expires.isoformat(timespec="seconds")})
             if checkpoint is not None:
                 f = checkpoint.fields
                 brain._emit(actor, "ai_checkpoint_set", {

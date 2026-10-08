@@ -193,7 +193,7 @@ def search(brain: Brain, cue: str, scope: str = "all", limit: int = 5) -> list[H
     for r in rows:
         if r["kind"] in EXCLUDED_KINDS:
             continue
-        in_h = r["hstatus"] == "waiting"
+        in_h = r["hstatus"] in ("waiting", "arrived")  # just arrived counts as recent, like the hippocampus
         if scope == "hippocampus" and not in_h or scope == "bookshelf" and in_h:
             continue
         s_val, l_val = sem.get(r["id"], 0.0), lex.get(r["id"], 0.0)

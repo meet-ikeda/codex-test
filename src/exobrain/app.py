@@ -37,6 +37,15 @@ STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
                 ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2"}
 
 
+def _label_counts(labels_json: str | None) -> dict[str, int] | None:
+    if not labels_json:
+        return None
+    counts: dict[str, int] = {}
+    for v in json.loads(labels_json).values():
+        counts[v] = counts.get(v, 0) + 1
+    return counts
+
+
 class App:
     def __init__(self, brain: Brain):
         self.brain = brain
@@ -315,7 +324,8 @@ class App:
             for r in c.execute(
                     "SELECT s.id, s.title, s.kind, s.author, s.ai_name, h.entered_at, h.expires_at,"
                     " (SELECT COUNT(*) FROM chunks WHERE source_id = s.id) AS chunks,"
-                    " (SELECT COUNT(*) FROM node_sources WHERE source_id = s.id) AS memories"
+                    " (SELECT COUNT(*) FROM node_sources WHERE source_id = s.id) AS memories,"
+                    " (SELECT labels_json FROM screenings WHERE source_id = s.id) AS labels"
                     " FROM hippocampus h JOIN sources s ON s.id = h.source_id WHERE h.status = 'waiting'"
                     " ORDER BY h.entered_at DESC"):
                 left = (datetime.fromisoformat(r["expires_at"]) - now).total_seconds() / 86400
@@ -324,7 +334,14 @@ class App:
                               "entered_at": r["entered_at"], "days_left": round(max(0.0, left), 1),
                               "days_total": b.settings.hippocampus_days,
                               "signals": sorted(waiting_signals.get(r["id"], set())),
-                              "memories": r["memories"], "chunks": r["chunks"]})
+                              "memories": r["memories"], "chunks": r["chunks"],
+                              "screened": _label_counts(r["labels"])})
+            # A. the receiving box: arrived, waiting to be screened (spec v0.8 §3.4)
+            arrived = [{"id": r["id"], "title": r["title"], "kind": r["kind"],
+                        "writer": r["ai_name"] if r["author"] == "ai" else "オーナー", "arrived_at": r["entered_at"]}
+                       for r in c.execute(
+                           "SELECT s.id, s.title, s.kind, s.author, s.ai_name, h.entered_at FROM hippocampus h"
+                           " JOIN sources s ON s.id = h.source_id WHERE h.status = 'arrived' ORDER BY h.entered_at")]
             kinds = {k: c.execute("SELECT COUNT(*) FROM nodes WHERE kind IN (?, ?) AND status = 'active'",
                                   (k, "case" if k == "episode" else k)).fetchone()[0]
                      for k in ("procedural", "semantic", "episode")}  # cases sit in the episode box (spec v0.8 §5.1)
@@ -346,7 +363,7 @@ class App:
                                       (week,)).fetchone()[0],
                 "faded": c.execute("SELECT COUNT(*) FROM hippocampus WHERE status = 'faded'").fetchone()[0],
             }
-        return {"inbox": pending_inbox(b), "hippocampus": hippo, "cortex": {"kinds": kinds, "memories": memories},
+        return {"inbox": pending_inbox(b), "arrived": arrived, "hippocampus": hippo, "cortex": {"kinds": kinds, "memories": memories},
                 "bookshelf": shelf, "flow": flow}
 
     # ---- past threads (spec v0.6 decision 6) -----------------------------------------
@@ -440,7 +457,10 @@ class App:
         from .hippocampus import encode_pending
 
         while not self._stop.wait(INBOX_POLL_SECONDS):
-            for step in (lambda: ingest(self.brain), self._scan_vault_if_due, lambda: encode_pending(self.brain)):
+            from . import screen
+
+            for step in (lambda: ingest(self.brain), self._scan_vault_if_due, lambda: encode_pending(self.brain),
+                         lambda: screen.run_if_due(self.brain)):  # around noon and 16:00 (spec v0.8 §3.4)
                 try:
                     step()
                 except Exception as e:  # keep the app alive; report in the terminal

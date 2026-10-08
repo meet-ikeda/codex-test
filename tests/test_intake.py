@@ -76,7 +76,7 @@ def test_daily_logs_in_the_box_are_filed_in_order_and_enter_the_hippocampus(brai
     assert [a["kind"] for a in added] == ["ai_daily", "ai_daily"]
     assert brain._conn.execute("SELECT cursor FROM ai_checkpoints WHERE key = 'codex:t-1'").fetchone()[0] == "c2"
     rows = brain._conn.execute("SELECT s.ai_name, h.status FROM sources s JOIN hippocampus h ON h.source_id = s.id")
-    assert [tuple(r) for r in rows] == [("Codex", "waiting"), ("Codex", "waiting")]
+    assert [tuple(r) for r in rows] == [("Codex", "arrived"), ("Codex", "arrived")]
     assert not any(box.iterdir())  # taken out of the box; the originals are on the bookshelf
 
 

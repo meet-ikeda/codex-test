@@ -538,10 +538,16 @@ async function loadBrain() {
   await guarded(async () => {
     const b = await api("/api/brain");
     // A. receiving box
-    $("#c-inbox").textContent = pad(b.inbox.length, 2);
-    $("#l-inbox").replaceChildren(...(b.inbox.length ? b.inbox.map((x) => li({},
-      t(x.name), x.needs_check ? m(`確認が必要: ${x.reason || ""}`) : m("まもなく取り込みます"))) :
-      [li({ class: "empty" }, "空です。届いたものはすぐ海馬へ移ります。")]));
+    // A. receiving box: files not yet read, and what arrived and waits to be screened (spec v0.8 §3.4)
+    const arrived = b.arrived || [];
+    $("#c-inbox").textContent = pad(b.inbox.length + arrived.length, 2);
+    const nextScreen = () => { const h = new Date().getHours(); return h < 12 ? "12 時ごろ" : h < 16 ? "16 時ごろ" : "今夜の睡眠"; };
+    const items = [...b.inbox.map((x) => li({},
+      t(x.name), x.needs_check ? m(`確認が必要: ${x.reason || ""}`) : m("まもなく取り込みます"))),
+    ...arrived.map((x) => li({ class: "clickable", on: { click: () => openSource(x.id) } },
+      t(x.title), m(`${SOURCE_JA[x.kind] || x.kind} · ${x.writer} · 精査待ち（次は${nextScreen()}）`)))];
+    $("#l-inbox").replaceChildren(...(items.length ? items :
+      [li({ class: "empty" }, "空です。届いたものは、1日3回（12時・16時ごろと睡眠のとき）精査して、注意が向いたものだけ海馬へ移します。")]));
     $("#l-inbox").querySelectorAll(".m").forEach((n) => { if (n.textContent.startsWith("確認")) n.classList.add("bad"); });
     // B. hippocampus
     $("#c-hippo").textContent = pad(b.hippocampus.length, 2);
@@ -549,6 +555,10 @@ async function loadBrain() {
       const left = Math.max(0, Math.min(1, h.days_left / h.days_total));
       const sigs = h.signals.map((s) => el("span", { class: "sig" }, PROMOTED_JA[s] || s));
       if (h.memories) sigs.push(el("span", { class: "sig soft" }, `記憶 ${h.memories}`));
+      const sc = h.screened || {};
+      if (sc.chatter) sigs.push(el("span", { class: "sig soft" }, `雑談 ${sc.chatter}`));
+      if (sc.repeat) sigs.push(el("span", { class: "sig soft" }, `既知 ${sc.repeat}`));
+      if (sc.drop) sigs.push(el("span", { class: "sig soft" }, `外した ${sc.drop}`));
       return li({ class: "clickable", on: { click: () => openSource(h.id) } },
         t(h.title), m(`${SOURCE_JA[h.kind] || h.kind} · ${h.writer} · あと ${h.days_left} 日`),
         sigs.length ? el("span", { class: "m" }, ...sigs) : null,

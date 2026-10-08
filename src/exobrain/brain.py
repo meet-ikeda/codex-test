@@ -126,7 +126,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(chunk_id UNINDEXED, gram
 -- The hippocampus: information waiting for sleep, which fades after a while (spec v0.5 §3).
 CREATE TABLE IF NOT EXISTS hippocampus (
     source_id TEXT PRIMARY KEY, entered_at TEXT NOT NULL, expires_at TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'waiting'  -- waiting | faded | promoted
+    status TEXT NOT NULL DEFAULT 'waiting'  -- arrived (in the receiving box) | waiting | dropped | faded | promoted
+);
+-- What screening let into the hippocampus, line by line (spec v0.8 §3.4). No row: everything (filed before).
+CREATE TABLE IF NOT EXISTS screenings (
+    source_id TEXT PRIMARY KEY, labels_json TEXT NOT NULL, repeats_json TEXT NOT NULL, judge TEXT, at TEXT NOT NULL
 );
 -- Where each AI thread's daily logs have reached (AI daily log protocol v1).
 CREATE TABLE IF NOT EXISTS ai_checkpoints (
@@ -158,7 +162,7 @@ CREATE TABLE IF NOT EXISTS chunk_vectors (
 """
 PROJECTION_TABLES = ("sources", "nodes", "edges", "sessions", "session_items", "source_fts", "shelves",
                      "sleep_runs", "sleep_marks", "chunks", "chunk_fts", "hippocampus", "ai_checkpoints",
-                     "node_sources", "revisions", "concept_aliases")
+                     "node_sources", "revisions", "concept_aliases", "screenings")
 
 
 class InvalidInput(ValueError):
@@ -385,6 +389,20 @@ class Brain:
                       " ON CONFLICT (source_id) DO UPDATE SET entered_at = excluded.entered_at,"
                       " expires_at = excluded.expires_at, status = 'waiting'",
                       (p["source_id"], ev.at, p["expires_at"]))
+        elif ev.type == "source_arrived":  # in the receiving box, waiting to be screened (spec v0.8 §3.4)
+            # Arriving again (a rebuild) puts it back in the receiving box, to be screened anew.
+            c.execute("INSERT INTO hippocampus (source_id, entered_at, expires_at, status) VALUES (?, ?, ?, 'arrived')"
+                      " ON CONFLICT (source_id) DO UPDATE SET status = 'arrived', entered_at = excluded.entered_at,"
+                      " expires_at = excluded.expires_at", (p["source_id"], ev.at, p["expires_at"]))
+            c.execute("DELETE FROM screenings WHERE source_id = ?", (p["source_id"],))
+        elif ev.type == "source_screened":
+            c.execute("INSERT INTO screenings (source_id, labels_json, repeats_json, judge, at) VALUES (?, ?, ?, ?, ?)"
+                      " ON CONFLICT (source_id) DO UPDATE SET labels_json = excluded.labels_json,"
+                      " repeats_json = excluded.repeats_json, judge = excluded.judge, at = excluded.at",
+                      (p["source_id"], events.canonical_json(p.get("labels") or {}),
+                       events.canonical_json(p.get("repeats") or {}), p.get("judge"), ev.at))
+            c.execute("UPDATE hippocampus SET status = ?, entered_at = ?, expires_at = ? WHERE source_id = ?",
+                      ("waiting" if p["kept"] else "dropped", ev.at, p["expires_at"], p["source_id"]))
         elif ev.type == "hippocampus_faded":
             c.executemany("UPDATE hippocampus SET status = 'faded' WHERE source_id = ? AND status = 'waiting'",
                           [(sid,) for sid in p["source_ids"]])

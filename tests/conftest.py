@@ -26,6 +26,14 @@ def no_real_claude_for_memory_md(monkeypatch):
     monkeypatch.setattr(portrait, "write", refuse)
 
 
+@pytest.fixture(autouse=True)
+def no_real_claude_for_screening(monkeypatch):
+    """Screening asks the real Claude Code during the day; in tests the AI cannot be asked (nothing is dropped)."""
+    import exobrain.screen as screen
+
+    monkeypatch.setattr(screen, "ask_claude", lambda brain, text: None)
+
+
 @pytest.fixture
 def settings(tmp_path):
     return Settings(home=tmp_path / "home", drive_root=tmp_path / "drive", embed_model="")

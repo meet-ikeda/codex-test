@@ -9,6 +9,9 @@ from exobrain.brain import Element, InvalidInput
 
 def _item_for(brain, text_has, kind="memo"):
     """The promote item for the passage containing `text_has`."""
+    from exobrain import screen
+
+    screen.run(brain)
     for seg, text in promote.candidates(brain, set()):
         if text_has in text:
             return promote.make_item(brain, seg, text)
@@ -43,6 +46,9 @@ def test_signals_owner_words_are_explicit_summaries_are_one_step_weaker(brain, s
     brain.submit_daily_log(session, "相談", ["打ち合わせをした"], [], [], ["写真は社内で撮る"], [],
                            reasons=["> 写真は自分たちで撮りたい"])
     signals = {}
+    from exobrain import screen
+
+    screen.run(brain)
     for seg, text in promote.candidates(brain, set()):
         signals[text.strip().splitlines()[0]] = seg.signal
     assert signals.get("- > 写真は自分たちで撮りたい") == "explicit"
@@ -160,7 +166,7 @@ def test_repromote_keeps_the_owners_memories_and_relearns_the_rest(brain, sessio
     assert brain.node(made)["status"] == "retired" and brain.node(own)["stage"] == "confirmed"
     waiting = brain._conn.execute("SELECT status FROM hippocampus WHERE source_id = ?",
                                   (memo["source_id"],)).fetchone()[0]
-    assert waiting == "waiting"
+    assert waiting == "arrived"  # back in the receiving box, to be screened anew (spec v0.8 §3.4)
     assert not brain._conn.execute("SELECT 1 FROM sleep_marks WHERE kind = 'promoted' AND key LIKE ?",
                                    (memo["source_id"] + ":%",)).fetchone()
     snapshot = brain.snapshot()

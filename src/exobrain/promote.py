@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 
 import numpy as np
 
+from . import screen
 from .bookshelf import read_body
 
 if TYPE_CHECKING:
@@ -40,7 +41,11 @@ ATOMS_PER_SEGMENT = 5
 ATOMS_PER_OWNER_SEGMENT = 8  # the owner's own notes are dense and were marked on purpose (2026-09-27)
 SIMILAR_SHOWN = 8
 REPEAT_SIM = 0.80  # bge-m3 cosine for "the same thing said again" — provisional, check on real logs
-IMPORTANCE = {"explicit": 1.0, "demand": 0.8, "summarized": 0.7, "repetition": 0.6, "association": 0.4}  # OUTBRAIN v0.4 §7.2 "I"
+IMPORTANCE = {"explicit": 1.0, "demand": 0.8, "summarized": 0.7, "attended": 0.6, "repetition": 0.6,
+              "association": 0.4, "chatter": 0.3}
+# The judge may weigh a memory, but never above what the owner's signal allows (spec v0.8 §7.3.1, §7.4).
+WEIGHT_CAP = {"explicit": 1.0, "demand": 1.0, "summarized": 0.8, "attended": 0.7, "repetition": 0.7,
+              "association": 0.5, "chatter": 0.3}  # OUTBRAIN v0.4 §7.2 "I"
 DERIVATIONS = ("verbatim", "paraphrase", "inferred")
 NOTHING = ("特になし", "なし", "")
 WIKILINK = re.compile(r"\[\[([^\]\n]+?)\]\]")  # [[A社]] / [[A社|A社様]]: a name marked by whoever wrote the note
@@ -109,7 +114,9 @@ def candidates(brain: Brain, done: set[str]) -> Iterator[tuple[Segment, str]]:
                 # A deposit is an AI's summary, except its owner's-words section; memos are the owner's own.
                 summed = r["kind"] == "deposit" and not any(h in (ch[2] or "") for h in OWNER_WORDS_SECTIONS)
                 segs.append(Segment(r["id"], ch[0], ch[1], "summarized" if summed else "explicit"))
-        elif r["kind"] == "ai_daily":
+        elif r["kind"] == "ai_daily" and (labels := screen.labels_of(brain, r["id"])) is not None:
+            segs += _screened_segments(r["id"], body, labels)
+        elif r["kind"] == "ai_daily":  # filed before screening existed (spec v0.8 §3.4)
             for heading, a, b in _daily_sections(body):
                 if b < a:
                     continue
@@ -127,6 +134,31 @@ def candidates(brain: Brain, done: set[str]) -> Iterator[tuple[Segment, str]]:
             text = "\n".join(lines[seg.line_start - 1 : seg.line_end])
             if _meaningful(text):
                 yield seg, text
+
+
+def _screened_segments(source_id: str, body: str, labels: dict[int, str]) -> list[Segment]:
+    """Runs of lines that screening let in and that may go on to the cortex, with their signal: the owner's words
+    are explicit, the owner's other kept sections summarized, lines tied to attention attended, small talk chatter.
+    The AI's own reading and next steps, and what the brain already holds (repeat), stay in the hippocampus."""
+    out: list[Segment] = []
+    for heading, a, b in _daily_sections(body):
+        run: list[int] = []
+        sig_of_run = None
+        for n in range(a, b + 1):
+            lab = labels.get(n)
+            if lab is None:
+                continue  # blank lines and the like do not break a run
+            sig = {"owner": "explicit" if heading in OWNER_WORDS_SECTIONS else "summarized",
+                   "related": "attended", "chatter": "chatter"}.get(lab)
+            if sig != sig_of_run and run:
+                out.append(Segment(source_id, run[0], run[-1], sig_of_run))
+                run = []
+            sig_of_run = sig
+            if sig:
+                run.append(n)
+        if run and sig_of_run:
+            out.append(Segment(source_id, run[0], run[-1], sig_of_run))
+    return out
 
 
 def _repeated(brain: Brain, source_id: str, text: str) -> bool:
@@ -212,6 +244,21 @@ KIND_RULE = (
     "case には case: {situation（いつ・何の仕事か・誰に向けたか・何を目指したか）, decision（選んだこと）, "
     "reason（オーナーが言った理由。言っていなければ空）, reaction（採った・直した・後で変えた。わからなければ空）} を付ける。"
     "「言ったはずです」などの発言そのものや、その時だけの決まりは episode か semantic にする。")
+LINK_TYPES = {"same_event": 0.6, "reason": 0.6, "evidence": 0.5, "lesson": 0.5, "related": 0.4, "contrast": 0.4}
+LINKS_PER_ATOM = 6
+PAST_SHOWN = 10
+BUNDLE_RULE = (
+    "1 つの出来事は、そのまま 1 文で覚えず、束に分けて抽象化する（spec v0.8 §7.3.1）: "
+    "episode（いつ・どの仕事で・何があったか）／case（判断があれば。状況・判断・理由・反応。教訓の候補は case.lesson に。"
+    "教訓は 1 回ではルールにしない）／semantic（オーナーにとっての意味）。"
+    "semantic は「オーナーにとって〇〇は〜」「オーナーは〜と知った」の形で書く。世間一般の意味や事実を書き換えない。"
+    "オーナーと関係のない一般知識は覚えない。"
+    "原子どうしと過去の記憶は links で結ぶ: [{to, type, why}]。to はこの回答の原子の番号（'a0', 'a1' …）か、"
+    "similar_memories・past_memories の id。type: same_event（同じ出来事から分けた）/ reason（理由）/ evidence（根拠）/ "
+    "lesson（教訓）/ related（関連）/ contrast（対立）。past_memories は意味や話題が近い過去の記憶。"
+    "本当に関係があるものだけを、why（20 字程度）を付けて結ぶ（例: 同じ大学院のほかの課題、似た判断、注意された出来事）。"
+    "importance: 0〜1。オーナーにとってどれだけ大事か。")
+CHATTER_HINT = "これは雑談として仕分けられた部分。episode にし、text を「雑談: 」で始める。importance は低く。"
 SCOPE_RULE = (
     "scope: その記憶が当てはまる範囲。空ならどの仕事にも当てはまる。案件・クライアント・場面（開発・コピーなど）の中だけなら"
     "その名前（40 文字以内）。迷ったら狭くする。この資料の案件: {project}。")
@@ -274,8 +321,9 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
     return {
         "type": "promote", "source_id": seg.source_id, "signal": seg.signal,
         "source": {"title": s["title"], "writer": s["ai_name"] if s["author"] == "ai" else "オーナー",
-                   "date": s["created_at"][:10]},
-        "lines": numbered, "similar_memories": similar_memories(brain, text),
+                   "date": meta.get("entry_date") or s["created_at"][:10]},  # when it happened, not when filed
+        "lines": numbered, "similar_memories": (similar := similar_memories(brain, text)),
+        "past_memories": past_memories(brain, text, {m["id"] for m in similar}),
         "known_concepts": known_concepts(brain, text),
         "instructions": (
             NOTE_TYPE_HINT.get(note_type, "") + (f"（この話の相手: {subject}）" if subject else "")
@@ -283,7 +331,8 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
             + f"この部分を、長く覚えておく価値のある「記憶の原子」に分ける（最大 {limit} 個。価値がなければ atoms を空に）。"
             "記憶の主語はオーナー。原子は単独で意味が通る 1 文（300 文字以内）で、次に役立つ形に言い直す"
             "（言葉を変えないのはオーナーの言葉だけ。口調や言い方の強さは episode の側にだけ残す）。"
-            + KIND_RULE + SCOPE_RULE.format(project=project or "なし") + REASON_RULE +
+            + (CHATTER_HINT if seg.signal == "chatter" else "")
+            + KIND_RULE + BUNDLE_RULE + SCOPE_RULE.format(project=project or "なし") + REASON_RULE +
             "derivation: verbatim（原文のまま）/ paraphrase（意味を変えずに整理）/ inferred（原文に直接はない推論）。"
             "lines: 日報内の根拠行 [開始, 終了]（lines にある番号だけ）。引用は書かない（プログラムが切り出す）。"
             + ("evidence は日報の元になった会話抜粋。各原子について、内容を裏づける連続した原会話の"
@@ -299,6 +348,31 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
         **({"project": project} if project else {}),
         **({"evidence": evidence} if evidence else {}),
     }
+
+
+def past_memories(brain: Brain, text: str, exclude: set[str], limit: int = PAST_SHOWN) -> list[dict]:
+    """Older memories near this passage, for the judge to link to: those about the same names, then the next
+    closest by meaning (spec v0.8 §7.3.1)."""
+    c = brain._conn
+    names = {m.split("|")[0].strip() for m in WIKILINK.findall(text)} | {k["name"] for k in known_concepts(brain, text)}
+    ids: list[str] = []
+    for name in names:
+        from .brain import normalize_concept
+
+        for r in c.execute(
+                "SELECT n.id FROM nodes c JOIN edges e ON e.dst = c.id AND e.kind = 'about' JOIN nodes n ON n.id = e.src"
+                " WHERE c.kind = 'concept' AND c.norm = ? AND n.status = 'active' ORDER BY n.importance DESC LIMIT 4",
+                (normalize_concept(name),)):
+            if r[0] not in exclude and r[0] not in ids:
+                ids.append(r[0])
+    for m in similar_memories(brain, text, limit=SIMILAR_SHOWN + limit):
+        if m["id"] not in exclude and m["id"] not in ids:
+            ids.append(m["id"])
+    out = []
+    for nid in ids[:limit]:
+        n = c.execute("SELECT id, kind, body, created_at FROM nodes WHERE id = ?", (nid,)).fetchone()
+        out.append({"id": n["id"], "kind": n["kind"], "text": n["body"], "date": n["created_at"][:10]})
+    return out
 
 
 def known_concepts(brain: Brain, text: str) -> list[dict]:
@@ -426,7 +500,32 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
                 scope = item["project"]  # a case belongs to its project unless said otherwise
         if about != "owner" and not subject and item.get("note_type"):
             raise InvalidInput(f"atoms[{i}] は {about} の話なので、subject に誰か（名前か役割）を入れてください。")
-        out.append({"kind": kind, "text": text, "derivation": der, "lines": ln, "quote": quote,
+        if item["signal"] == "chatter":
+            if kind != "episode":
+                raise InvalidInput(f"atoms[{i}] は雑談なので、kind は episode にしてください。")
+            if not text.startswith("雑談"):
+                text = f"雑談: {text}"[:TEXT_MAX]
+        try:
+            weight = float(a.get("importance", IMPORTANCE[item["signal"]]))
+        except (TypeError, ValueError):
+            raise InvalidInput(f"atoms[{i}].importance は 0〜1 の数です。") from None
+        weight = round(max(0.0, min(weight, WEIGHT_CAP.get(item["signal"], 0.5))), 3)
+        if case is not None:
+            case["lesson"] = " ".join(str((a.get("case") or {}).get("lesson") or "").split())[:200]
+        links = []
+        allowed = known | {m["id"] for m in item.get("past_memories", [])}
+        for k, ln_ in enumerate((a.get("links") or [])[:LINKS_PER_ATOM]):
+            to, typ = str((ln_ or {}).get("to") or ""), (ln_ or {}).get("type")
+            if typ not in LINK_TYPES:
+                raise InvalidInput(f"atoms[{i}].links[{k}].type は {', '.join(LINK_TYPES)} のいずれかです。")
+            local = re.fullmatch(r"a(\d+)", to)
+            if local and not (0 <= int(local.group(1)) < len(atoms) and int(local.group(1)) != i):
+                raise InvalidInput(f"atoms[{i}].links[{k}].to の {to} は、この回答のほかの原子の番号にしてください。")
+            if not local and to not in allowed:
+                raise InvalidInput(f"atoms[{i}].links[{k}].to には、原子の番号か similar_memories・past_memories の id を入れてください。")
+            links.append({"to": to, "type": typ, "why": " ".join(str(ln_.get("why") or "").split())[:80]})
+        out.append({"kind": kind, "text": text, "derivation": der, "lines": ln, "quote": quote, "importance": weight,
+                    "links": links,
                     "confidence": round(conf, 3), "concepts": concepts, "concept_meta": concept_meta, "about": about,
                     "scope": scope, "case": case, "subject": subject,
                     "same_as": a.get("same_as"), "supersedes": a.get("supersedes"),
@@ -438,7 +537,8 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
     """Write validated atoms. Must run inside brain._tx()."""
     from .brain import Element, new_id
 
-    counts = {"new": 0, "reinforced": 0, "superseded": 0}
+    counts = {"new": 0, "reinforced": 0, "superseded": 0, "links": 0}
+    ids: list[str] = []  # the memory each atom became (or strengthened)
     src = item["source_id"]
     evidence_source = (item.get("evidence") or {}).get("source_id")
     origin = brain._conn.execute("SELECT origin_file FROM sources WHERE id = ?", (src,)).fetchone()[0]
@@ -457,9 +557,11 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
                     "line_start": a["evidence_lines"][0], "line_end": a["evidence_lines"][1],
                     "quote": a["evidence_quote"], "occurrence": False})
             counts["reinforced"] += 1
+            ids.append(a["same_as"])
             continue
         created = brain._add_elements(
-            actor, [Element(a["kind"], a["text"], a["concepts"], IMPORTANCE[item["signal"]], a.get("concept_meta") or {})], src,
+            actor, [Element(a["kind"], a["text"], a["concepts"], a.get("importance", IMPORTANCE[item["signal"]]),
+                     a.get("concept_meta") or {})], src,
             promoted_by=item["signal"], extra={"derivation": a["derivation"], "confidence": a["confidence"],
                                                "about": a["about"], **({"subject": a["subject"]} if a["subject"] else {}),
                                                **({"scope": a["scope"]} if a.get("scope") else {}),
@@ -467,6 +569,7 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
                                                # the owner said it holds generally (validated above)
                                                **({"stage": "confirmed"} if a["kind"] == "procedural" else {})})
         nid = created[0]["id"]
+        ids.append(nid)
         brain._emit(actor, "node_sourced", {"node_id": nid, "source_id": src, "line_start": a["lines"][0],
                                             "line_end": a["lines"][1], "quote": a["quote"]})
         if evidence_source and a["evidence_quote"]:
@@ -480,6 +583,17 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
             brain._emit(actor, "edge_set", {"src": nid, "dst": a["supersedes"], "kind": "supersedes", "weight": 1.0,
                                             "origin": "sleep"})
             counts["superseded"] += 1
+    # The judge's links: within the bundle of one event, and to past memories, each with its reason.
+    for a, nid in zip(atoms, ids):
+        for ln_ in a.get("links") or []:
+            local = re.fullmatch(r"a(\d+)", ln_["to"])
+            dst = ids[int(local.group(1))] if local else ln_["to"]
+            if dst == nid:
+                continue
+            w = max(LINK_TYPES[ln_["type"]], brain._edge_weight(nid, dst, ln_["type"]))
+            brain._emit(actor, "edge_set", {"src": nid, "dst": dst, "kind": ln_["type"], "weight": w,
+                                            "origin": "judge", "why": ln_["why"]})
+            counts["links"] += 1
     return counts
 
 

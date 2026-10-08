@@ -5,7 +5,8 @@ The bookshelf keeps every original, so the cortex can be learned again. This:
 2. retires what earlier sleeps made (history and links stay; recall no longer shows them);
 3. keeps what the owner made directly — "remember this", corrections, /good, rewrites — and marks the owner's
    own rules as confirmed, since the owner said them;
-4. puts the originals back in the hippocampus, so that the next sleeps promote them again with the new intake
+4. puts the originals back in the receiving box, so that screening and the next sleeps take them in again
+   with the new intake
    (owner's words / summarized, cases instead of one-off rules, scope).
 Nothing is erased. The sleeps re-learn a few originals a night, so a long rebuild takes many nights.
 """
@@ -54,7 +55,7 @@ def run(brain: Brain, since: str, actor: str = "human") -> dict[str, Any]:
         for nid in p["confirm"]:
             brain._emit(actor, "node_updated", {"id": nid, "stage": "confirmed"})
         for sid in p["sources"]:
-            brain._emit(actor, "hippocampus_entered", {"source_id": sid, "expires_at": expires, "why": "repromote"})
+            brain._emit(actor, "source_arrived", {"source_id": sid, "expires_at": expires, "why": "repromote"})
         if p["sources"]:
             brain._emit(actor, "sleep_marks_cleared", {"kind": "promoted", "source_ids": p["sources"]})
     brain._recaller.index.version = -1

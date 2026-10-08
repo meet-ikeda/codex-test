@@ -45,6 +45,9 @@ def test_records_answer_when_the_cortex_cannot(brain, session):
 
 def test_faded_information_is_still_on_the_bookshelf(brain, session):
     src = add_memo(brain, "昔の話", "去年の採用サイトでは社員が主役だった。\n")
+    from exobrain import screen
+
+    screen.run(brain)  # the memo was handed over on purpose: it enters the hippocampus whole
     with brain._tx():
         brain._conn.execute("UPDATE hippocampus SET expires_at = ?",
                             ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),))
