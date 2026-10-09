@@ -42,9 +42,11 @@ if TYPE_CHECKING:
 DUE_AFTER_HOURS = 20
 REPLAY_RATE = 0.05
 REPLAY_PER_SESSION = 8
-DORMANT_AFTER_DAYS = 90
-DORMANT_MAX_ACCESS = 1
-DORMANT_MAX_IMPORTANCE = 0.8
+# Forgetting (spec v0.8 §9.3, 2026-10-09): a memory whose strength (recall.strength) has fallen to this goes to
+# sleep: no longer recalled, kept in history and on the bookshelf, woken when it comes up again. Unused, a new
+# memory gets there in about 54 days, a little-used one in about 2.5 months, a well-used one in about 3.
+FORGET_BELOW = 0.1
+FORGET_MIN_AGE_DAYS = 30
 NEW_LINK_WEIGHT = 0.1
 NEW_LINK_MIN_SHARED = 2
 NEW_LINKS_MAX = 200
@@ -172,15 +174,23 @@ def stage_a(brain: Brain, since: str) -> dict[str, int]:
                                                     "weight": round(w, 6), "origin": "replay", "co_activation": True})
                     stats["replayed_links"] += 1
 
-        # Long-unused, unimportant memories go dormant (kept, but no longer recalled).
-        cutoff = (now - timedelta(days=DORMANT_AFTER_DAYS)).isoformat()
-        for (nid,) in c.execute(
-            "SELECT id FROM nodes WHERE status = 'active' AND kind != 'concept' AND pinned = 0"
-            " AND importance < ? AND access_count <= ? AND COALESCE(last_activated_at, created_at) < ?",
-            (DORMANT_MAX_IMPORTANCE, DORMANT_MAX_ACCESS, cutoff),
-        ).fetchall():
-            brain._emit(ACTOR, "node_updated", {"id": nid, "status": "dormant"})
-            stats["dormant"] += 1
+        # Forgetting: weak memories go to sleep (kept, no longer recalled; woken when they come up again).
+        # Never: rules marked "always" or confirmed (handed out at every start, which is not counted as use),
+        # what the owner put in directly ("覚えておいて", /good), and anything younger than a month.
+        from .recall import strength
+
+        young = (now - timedelta(days=FORGET_MIN_AGE_DAYS)).isoformat()
+        for r in c.execute(
+            "SELECT id, base_strength, occurrences, access_count, goods, corrections, last_activated_at, created_at,"
+            " pinned FROM nodes WHERE status = 'active' AND kind != 'concept' AND pinned = 0 AND created_at < ?"
+            " AND NOT (kind = 'procedural' AND stage = 'confirmed')"
+            " AND NOT (created_by != 'sleep' AND EXISTS (SELECT 1 FROM sources s WHERE s.id = nodes.source_id"
+            " AND s.author = 'human'))", (young,)).fetchall():
+            s = strength(r["base_strength"], r["occurrences"], r["access_count"], r["goods"], r["corrections"],
+                         r["last_activated_at"] or r["created_at"], r["pinned"], now)
+            if s <= FORGET_BELOW:
+                brain._emit(ACTOR, "node_updated", {"id": r["id"], "status": "dormant", "strength": round(s, 3)})
+                stats["dormant"] += 1
 
         # New links: recent memories that share concepts with others but are not linked to them yet.
         rows = c.execute(

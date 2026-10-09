@@ -195,7 +195,7 @@ def similar_memories(brain: Brain, text: str, limit: int = SIMILAR_SHOWN) -> lis
     ids: list[str] = []
     if emb is not None:
         rows = c.execute("SELECT v.node_id, v.vec FROM node_vectors v JOIN nodes n ON n.id = v.node_id"
-                         " WHERE v.model = ? AND n.status = 'active'", (emb.model,)).fetchall()
+                         " WHERE v.model = ? AND n.status IN ('active', 'dormant')", (emb.model,)).fetchall()
         if rows:
             try:
                 q = np.asarray(emb.embed([text])[0], dtype=np.float32)
@@ -209,13 +209,14 @@ def similar_memories(brain: Brain, text: str, limit: int = SIMILAR_SHOWN) -> lis
 
         q = bigrams(text)
         scored = [(len(q & bigrams(r[1] or "")), r[0]) for r in
-                  c.execute("SELECT id, body FROM nodes WHERE status = 'active' AND kind != 'concept'")]
+                  c.execute("SELECT id, body FROM nodes WHERE status IN ('active', 'dormant') AND kind != 'concept'")]
         ids = [nid for s, nid in sorted(scored, reverse=True)[:limit] if s > 0]
     out = []
     for nid in ids:
-        n = c.execute("SELECT id, kind, body FROM nodes WHERE id = ?", (nid,)).fetchone()
-        if n:
-            out.append({"id": n["id"], "kind": n["kind"], "text": n["body"]})
+        n = c.execute("SELECT id, kind, body, status FROM nodes WHERE id = ?", (nid,)).fetchone()
+        if n:  # a forgotten (sleeping) memory is shown too: if it is the same, it wakes instead of being copied
+            out.append({"id": n["id"], "kind": n["kind"], "text": n["body"],
+                        **({"asleep": True} if n["status"] == "dormant" else {})})
     return out
 
 
@@ -556,6 +557,10 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
                     "node_id": a["same_as"], "source_id": evidence_source,
                     "line_start": a["evidence_lines"][0], "line_end": a["evidence_lines"][1],
                     "quote": a["evidence_quote"], "occurrence": False})
+            if brain.node(a["same_as"])["status"] == "dormant":  # forgotten, and now it came up again: it wakes
+                brain._emit(actor, "node_updated", {"id": a["same_as"], "status": "active"})
+                brain._emit(actor, "nodes_touched", {"ids": [a["same_as"]]})
+                counts["woken"] = counts.get("woken", 0) + 1
             counts["reinforced"] += 1
             ids.append(a["same_as"])
             continue

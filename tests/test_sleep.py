@@ -38,24 +38,56 @@ def test_replay_strengthens_what_a_conversation_recalled(brain, session):
     assert stats["replayed_links"] >= 1 and after > before
 
 
-def test_unused_memories_fall_asleep_but_important_ones_stay(brain, session, monkeypatch):
+def _age(brain, nid, days):
+    from datetime import datetime, timedelta, timezone
+
+    then = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    brain._conn.execute("UPDATE nodes SET created_at = ?, last_activated_at = NULL WHERE id = ?", (then, nid))
+
+
+def test_weak_memories_fall_asleep_but_rules_and_the_owners_own_stay(brain, session):
+    """Spec v0.8 §9.3: forgotten at strength 0.1 (unused ~54 days); confirmed rules and the owner's own stay."""
     trivia = remember(brain, session, "episode", "昼はそばを食べた", importance=0.3)
-    rule = remember(brain, session, "procedural", "作る前に要件を確認する", importance=0.9)
-    monkeypatch.setattr(sleep, "DORMANT_AFTER_DAYS", -1)  # pretend a long time has passed
+    recent = remember(brain, session, "episode", "昼はうどんを食べた", importance=0.3)
+    rule = brain.remember_explicit(session, "作る前にいつも要件を確認する", "procedural")["node_id"]
+    _age(brain, trivia, 60)
+    _age(brain, recent, 40)
+    _age(brain, rule, 200)
     assert sleep.stage_a(brain, "0000")["dormant"] == 1
-    assert brain.node(trivia)["status"] == "dormant" and brain.node(rule)["status"] == "active"
+    assert brain.node(trivia)["status"] == "dormant"
+    assert brain.node(recent)["status"] == "active" and brain.node(rule)["status"] == "active"
     assert trivia not in brain.recall(session, "昼はそばを食べた")["memory_ids"]
 
 
-def test_dormant_memory_wakes_when_corrected(brain, session, monkeypatch):
+def test_dormant_memory_wakes_when_corrected(brain, session):
     old = remember(brain, session, "semantic", "取引先の担当は佐藤さん", ["取引先"], importance=0.3)
-    monkeypatch.setattr(sleep, "DORMANT_AFTER_DAYS", -1)
+    _age(brain, old, 90)
     sleep.stage_a(brain, "0000")
     t = brain.trace_correction(session, "取引先の担当は佐藤さんだよ", "")
     cand = next(c for c in t["brain_candidates"] if c["id"] == old)
     assert cand["dormant"]
     r = brain.apply_correction(session, t["trace_id"], "reinforce", target_id=old)
     assert "眠っていた記憶" in r["message_to_user"] and brain.node(old)["status"] == "active"
+
+
+def test_a_forgotten_memory_wakes_when_it_comes_up_again(brain, session):
+    from exobrain import inbox, promote, screen
+
+    old = remember(brain, session, "semantic", "納品物は PDF と PNG の両方で渡す", importance=0.5)
+    _age(brain, old, 90)
+    sleep.stage_a(brain, "0000")
+    assert brain.node(old)["status"] == "dormant"
+    inbox.add_memo(brain, "メモ", "- 納品物は PDF と PNG の両方で渡す\n")
+    screen.run(brain)
+    seg, text = next(iter(promote.candidates(brain, set())))
+    item = promote.make_item(brain, seg, text)
+    assert any(m["id"] == old and m.get("asleep") for m in item["similar_memories"])
+    n = next(n for n, x in item["lines"] if "PDF" in x)
+    atoms = promote.validate(brain, item, {"atoms": [{"kind": "semantic", "text": "納品物は PDF と PNG の両方で渡す",
+                                                      "derivation": "verbatim", "lines": [n, n], "same_as": old}]})
+    with brain._tx():
+        counts = promote.apply(brain, "sleep", item, atoms)
+    assert counts["woken"] == 1 and brain.node(old)["status"] == "active" and counts["new"] == 0
 
 
 def test_new_links_between_memories_sharing_concepts(brain, session):
