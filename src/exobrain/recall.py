@@ -36,12 +36,46 @@ LINK_FLOOR = 0.3  # ...but never below 30% of their learned weight: long-term me
 KIND_LABEL_JA = {"episode": "出来事", "semantic": "知識", "procedural": "ルール", "concept": "概念", "case": "事例"}
 
 
-def effective_weight(weight: float, last_reinforced_at: str | None, now: datetime) -> float:
-    """Links fade with disuse. Computed at read time, so decay needs no events."""
-    if not last_reinforced_at:
+# What a memory is about, and what one event was split into, are structure: they do not fade with disuse.
+STRUCTURAL_LINKS = {"about", "same_event", "reason", "evidence", "lesson", "contrast", "derived_from",
+                    "contradicted_by", "revised_in", "supersedes"}
+
+
+def effective_weight(weight: float, last_reinforced_at: str | None, now: datetime, kind: str | None = None) -> float:
+    """Associations fade with disuse, toward zero (spec v0.8 §9.2: the bookshelf can teach them again).
+    Computed at read time, so decay needs no events."""
+    if not last_reinforced_at or kind in STRUCTURAL_LINKS:
         return weight
     days = max(0.0, (now - datetime.fromisoformat(last_reinforced_at)).total_seconds() / 86400)
-    return weight * (LINK_FLOOR + (1 - LINK_FLOOR) * 0.5 ** (days / LINK_HALF_LIFE_DAYS))
+    return weight * 0.5 ** (days / LINK_HALF_LIFE_DAYS)
+
+
+# A memory's strength (2026-10-09): what use has made of it, fading with time since it was last used.
+# Computed at read time from what the brain already counts, so nothing is rewritten.
+USE_REPEAT, USE_RECALL, USE_GOOD, USE_CORRECTION = 0.5, 0.12, 0.6, 0.6
+STRENGTH_FLOOR = 0.35   # a memory nobody has used yet
+STRENGTH_HALF_LIFE_DAYS = 30.0
+
+
+def strength(base: float, occurrences: int, access_count: int, goods: int, corrections: int,
+             last_used: str | None, pinned: int, now: datetime | None = None) -> float:
+    """0 .. about 1.5: grows with each time it comes up again, is recalled, praised (/good) or pointed out
+    ("前にも言った"), saturating; halves every 30 days unused. A rule marked "always" (pinned) does not fade."""
+    use = (USE_REPEAT * max(0, (occurrences or 1) - 1) + USE_RECALL * (access_count or 0)
+           + USE_GOOD * (goods or 0) + USE_CORRECTION * (corrections or 0))
+    grown = STRENGTH_FLOOR + (1 - STRENGTH_FLOOR) * (1 - math.exp(-use))
+    if pinned or not last_used:
+        return (base or 1.0) * grown
+    now = now or datetime.now(timezone.utc)
+    days = max(0.0, (now - datetime.fromisoformat(last_used)).total_seconds() / 86400)
+    return (base or 1.0) * grown * 0.5 ** (days / STRENGTH_HALF_LIFE_DAYS)
+
+
+def strength_sql(prefix: str = "") -> str:
+    """The same, for ORDER BY (the function is registered on the connection by Brain)."""
+    p = prefix
+    return (f"strength({p}base_strength, {p}occurrences, {p}access_count, {p}goods, {p}corrections,"
+            f" COALESCE({p}last_activated_at, {p}created_at), {p}pinned)")
 
 
 def normalize(text: str) -> str:
@@ -142,13 +176,13 @@ class Recaller:
 
     def _neighbors(self, nid: str) -> list[tuple[str, float]]:
         rows = self.conn.execute(
-            "SELECT e.src, e.dst, e.weight, e.last_reinforced_at FROM edges e JOIN nodes n"
+            "SELECT e.src, e.dst, e.weight, e.last_reinforced_at, e.kind FROM edges e JOIN nodes n"
             " ON n.id = CASE WHEN e.src = ? THEN e.dst ELSE e.src END"
             " WHERE (e.src = ? OR e.dst = ?) AND n.status = 'active' AND e.kind != 'supersedes' AND e.weight > 0",
             (nid, nid, nid),
         ).fetchall()
         now = datetime.now(timezone.utc)
-        return [(dst if src == nid else src, effective_weight(w, last, now)) for src, dst, w, last in rows]
+        return [(dst if src == nid else src, effective_weight(w, last, now, kind)) for src, dst, w, last, kind in rows]
 
     def spread(self, seeds: dict[str, float]) -> tuple[dict[str, float], dict[str, int], dict[str, str]]:
         activation = dict(seeds)
@@ -193,14 +227,14 @@ class Recaller:
             q = ",".join("?" * len(part))
             for r in self.conn.execute(
                 f"SELECT id, kind, body, created_at, created_by, importance, base_strength, access_count,"
-                f" last_activated_at, stage, scope FROM nodes WHERE id IN ({q}) AND status = 'active'"
+                f" last_activated_at, stage, scope, occurrences, goods, corrections, pinned FROM nodes"
+                f" WHERE id IN ({q}) AND status = 'active'"
                 f" AND kind != 'concept'",
                 part,
             ):
-                last = r["last_activated_at"] or r["created_at"]
-                age_days = max(0.0, (now - datetime.fromisoformat(last)).total_seconds() / 86400)
-                recency = 0.5 + 0.5 * math.exp(-age_days / RECENCY_DAYS)
-                base = r["base_strength"] * (1 + math.log1p(r["access_count"])) * recency * (0.5 + r["importance"])
+                s = strength(r["base_strength"], r["occurrences"], r["access_count"], r["goods"], r["corrections"],
+                             r["last_activated_at"] or r["created_at"], r["pinned"], now)
+                base = max(0.05, s) * (0.5 + r["importance"])  # the old and unused stay findable, just quieter
                 a = activation[r["id"]]
                 hits.append(Hit(r["id"], r["kind"], r["body"], r["created_at"], r["created_by"], a, a * base,
                                 hops[r["id"]], self._path(r["id"], parent), r["stage"], r["scope"]))
@@ -225,7 +259,7 @@ class Recaller:
         rows = self.conn.execute(
             "SELECT id, kind, body, created_at, created_by, stage, scope FROM nodes WHERE status = 'active'"
             " AND kind = 'procedural' AND (pinned = 1 OR (stage = 'confirmed' AND COALESCE(scope, '') = ''))"
-            " ORDER BY pinned DESC, importance * base_strength DESC, access_count DESC LIMIT ?",
+            " ORDER BY pinned DESC, importance * " + strength_sql() + " DESC, access_count DESC LIMIT ?",
             (limit + len(exclude),),
         )
         return [Hit(r[0], r[1], r[2], r[3], r[4], 0.0, 0.0, 0, [r[0]], r[5], r[6])

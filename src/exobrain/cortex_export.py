@@ -15,6 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .recall import strength_sql
+
 if TYPE_CHECKING:
     from .brain import Brain
 
@@ -44,7 +46,7 @@ def export(brain: Brain) -> dict[str, int]:
     c = brain._conn
     nodes = c.execute(
         "SELECT * FROM nodes WHERE status = 'active' AND kind IN ('procedural', 'semantic', 'episode', 'case')"
-        " ORDER BY pinned DESC, importance * base_strength DESC, created_at").fetchall()
+        " ORDER BY pinned DESC, importance * " + strength_sql() + " DESC, created_at").fetchall()
     counts = {k: 0 for k in FOLDERS}
     index = ["# 大脳皮質（写し）", "", NOTICE, "",
              f"書き出した日時: {datetime.now().astimezone():%Y-%m-%d %H:%M}", ""]

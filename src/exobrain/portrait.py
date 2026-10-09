@@ -18,6 +18,8 @@ import subprocess
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from .recall import strength_sql
+
 if TYPE_CHECKING:
     from .brain import Brain
 
@@ -71,7 +73,7 @@ def digest(brain: Brain) -> tuple[str, dict[str, int]]:
     # Strongest first, so that if the cortex outgrows the budget only the weakest are left out.
     ranked = c.execute(
         "SELECT id FROM nodes WHERE status = 'active' AND kind IN ('procedural', 'semantic', 'case', 'episode')"
-        " ORDER BY pinned DESC, importance * base_strength DESC, access_count DESC, created_at DESC").fetchall()
+        " ORDER BY pinned DESC, importance * " + strength_sql() + " DESC, access_count DESC, created_at DESC").fetchall()
     keep, used = set(), 0
     for (nid,) in ranked:
         cost = estimate_tokens(c.execute("SELECT COALESCE(body, '') || COALESCE(case_json, '') FROM nodes WHERE id = ?",
@@ -83,7 +85,7 @@ def digest(brain: Brain) -> tuple[str, dict[str, int]]:
     for kind in KINDS:
         rows = [r for r in c.execute(
             "SELECT id, body, stage, scope, case_json, created_at, about, subject FROM nodes"
-            " WHERE status = 'active' AND kind = ? ORDER BY pinned DESC, importance * base_strength DESC,"
+            " WHERE status = 'active' AND kind = ? ORDER BY pinned DESC, importance * " + strength_sql() + " DESC,"
             " access_count DESC, created_at DESC", (kind,)).fetchall() if r["id"] in keep]
         counts[kind] = c.execute("SELECT COUNT(*) FROM nodes WHERE status = 'active' AND kind = ?",
                                  (kind,)).fetchone()[0]

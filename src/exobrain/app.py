@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, urlparse
 from . import safety, sleep
 from .brain import Brain, InvalidInput
 from .inbox import ingest
-from .recall import effective_weight
+from .recall import effective_weight, strength, strength_sql
 
 WEB = Path(__file__).parent / "web"
 DEFAULT_PORT = 8765
@@ -65,7 +65,7 @@ class App:
             kinds.append("case")  # a case is an episodic memory (spec v0.8 §5.1), shown with the episodes
         statuses = ["active", "dormant"] if q.get("dormant") == "1" else ["active"]
         sql = (f"SELECT rowid AS no, id, kind, label, status, pinned, base_strength, access_count, created_at,"
-               f" created_by, source_id"
+               f" created_by, source_id, occurrences, goods, corrections, last_activated_at"
                f" FROM nodes WHERE kind IN ({','.join('?' * len(kinds))}) AND status IN ({','.join('?' * len(statuses))})")
         args: list[Any] = [*kinds, *statuses]
         if q.get("days"):
@@ -98,7 +98,7 @@ class App:
                     if t in concept_rows:
                         concept_ids.add(t)
                     edges.append({"s": s, "t": t, "kind": r["kind"], "origin": r["origin"],
-                                  "w": round(effective_weight(r["weight"], r["last_reinforced_at"], now), 4)})
+                                  "w": round(effective_weight(r["weight"], r["last_reinforced_at"], now, r["kind"]), 4)})
             edges.sort(key=lambda e: -e["w"])
             edges = edges[:MAX_GRAPH_EDGES]
         degree: dict[str, int] = defaultdict(int)
@@ -108,8 +108,9 @@ class App:
         changed = self._changed_in_last_sleep()
         nodes = [{"id": n["id"], "no": n["no"], "kind": n["kind"], "label": n["label"], "status": n["status"],
                   "pinned": bool(n["pinned"]), "created_at": n["created_at"], "created_by": n["created_by"],
-                  "size": round(3 + 2.2 * math.log1p(n["access_count"]) + 1.5 * n["base_strength"]
-                                + (4 if n["pinned"] else 0), 2),
+                  "size": round(3 + 7 * strength(n["base_strength"], n["occurrences"], n["access_count"], n["goods"],
+                                                 n["corrections"], n["last_activated_at"] or n["created_at"],
+                                                 n["pinned"]) + (4 if n["pinned"] else 0), 2),
                   "changed": n["id"] in changed} for n in elements]
         concepts = c.execute(
             f"SELECT id, label FROM nodes WHERE id IN ({','.join('?' * len(concept_ids))})",
@@ -153,7 +154,7 @@ class App:
                 continue
             nbrs.append({"id": other, "label": o["label"], "kind": o["kind"], "status": o["status"],
                          "link": e["kind"], "origin": e["origin"],
-                         "w": round(effective_weight(e["weight"], e["last_reinforced_at"], now), 3)})
+                         "w": round(effective_weight(e["weight"], e["last_reinforced_at"], now, e["kind"]), 3)})
         nbrs.sort(key=lambda x: -x["w"])
         source = None
         if n["source_id"]:
@@ -166,7 +167,11 @@ class App:
         return {"node": {"no": no, **{k: n[k] for k in ("id", "kind", "label", "body", "status", "pinned",
                                                         "corrections", "importance", "base_strength",
                                                         "access_count", "created_at", "created_by",
-                                                        "last_activated_at", "stage", "scope")},
+                                                        "last_activated_at", "stage", "scope", "occurrences",
+                                                        "goods")},
+                         "strength": round(strength(n["base_strength"], n["occurrences"], n["access_count"],
+                                                    n["goods"], n["corrections"],
+                                                    n["last_activated_at"] or n["created_at"], n["pinned"]), 2),
                          "case": json.loads(n["case_json"]) if n["case_json"] else None},
                 "derived_from": [dict(r) for r in b._conn.execute(
                     "SELECT x.id, x.body, e.kind AS link FROM edges e JOIN nodes x ON x.id = e.dst"
@@ -349,11 +354,11 @@ class App:
             for k in ("procedural", "semantic", "episode"):  # each box shows its strongest
                 memories += [dict(r) for r in c.execute(
                     "SELECT n.id, n.kind, n.body, n.promoted_by, n.importance, n.base_strength, n.goods, n.corrections,"
-                    " n.about, n.subject, n.stage, n.scope,"
+                    " n.about, n.subject, n.stage, n.scope, n.last_activated_at," + strength_sql("n.") + " AS strength,"
                     " n.occurrences, n.pinned, n.created_at, n.access_count,"
                     " (SELECT COUNT(*) FROM revisions r WHERE r.node_id = n.id) AS revisions"
                     " FROM nodes n WHERE n.status = 'active' AND (n.kind = ? OR (? = 'episode' AND n.kind = 'case'))"
-                    " ORDER BY n.pinned DESC, n.importance * n.base_strength + 0.1 * n.goods + 0.1 * n.corrections DESC,"
+                    " ORDER BY n.pinned DESC, n.importance * " + strength_sql("n.") + " DESC,"
                     " n.created_at DESC LIMIT 20", (k, k))]
             shelf = {r[0]: r[1] for r in c.execute("SELECT kind, COUNT(*) FROM sources WHERE erased = 0 GROUP BY kind")}
             flow = {

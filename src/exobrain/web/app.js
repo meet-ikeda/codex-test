@@ -352,7 +352,7 @@ async function selectNode(id) {
   await guarded(async () => renderDetail(await api(`/api/node/${encodeURIComponent(id)}`)));
 }
 
-function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes = [], derived_from = [] }) {
+function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes = [], derived_from = [], strength = null }) {
   const kase = node.case || null;
   const parts = [
     el("button", { class: "close", on: { click: clearSelection } }, "Close ×"),
@@ -387,7 +387,8 @@ function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes
         el("button", { class: "link cap", on: { click: () => answer("yes") } }, "そう（ルールにする）"), " / ",
         el("button", { class: "link cap", on: { click: () => answer("no") } }, "違う（外す）")));
     }
-    const facts = [["Recalled", pad(node.access_count, 2)], ["Strength", node.base_strength.toFixed(1)],
+    const facts = [["Recalled", pad(node.access_count, 2)], ["Strength", strength != null ? strength.toFixed(2) : node.base_strength.toFixed(1)],
+      ["Repeated", pad(Math.max(0, (node.occurrences || 1) - 1), 2)],
       ["Importance", node.importance.toFixed(1)], ["Corrected", pad(node.corrections, 2)],
       ["Links", pad(neighbors.length, 2)], ["Last recall", node.last_activated_at ? when(node.last_activated_at, false) : "—"]];
     parts.push(el("div", { class: "facts" }, facts.map(([k, v]) => el("div", {}, cap(k), el("span", {}, v)))));
@@ -418,7 +419,8 @@ function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes
   for (const n of neighbors) {
     const bar = el("span", { class: "wbar" });
     bar.style.width = `${Math.round(4 + 32 * (n.w / maxW))}px`;
-    parts.push(el("div", { class: "nbr", on: { click: () => focusNode(n.id) } }, glyph(n.kind), bar, el("span", { class: "t" }, n.label)));
+    parts.push(el("div", { class: "nbr", on: { click: () => focusNode(n.id) } }, glyph(n.kind), bar,
+      el("span", { class: "t" }, n.label), el("span", { class: "w" }, n.w.toFixed(2))));
   }
   if (node.kind !== "concept") {
     parts.push(el("p", {}, el("button", { class: "link cap", on: { click: () => addToErase("nodes", node.id) } }, "この記憶を消去の候補に入れる")));
@@ -567,7 +569,7 @@ async function loadBrain() {
     // C. cortex: three boxes, links cross them freely
     const k = b.cortex.kinds;
     $("#c-cortex").textContent = pad(k.procedural + k.semantic + k.episode, 2);
-    const score = (n) => n.importance * n.base_strength + 0.1 * (n.goods + n.corrections);
+    const score = (n) => n.importance * (n.strength ?? n.base_strength);
     const maxS = Math.max(0.01, ...b.cortex.memories.map(score));
     const EMPTY = { procedural: "まだありません。注意されたこと・好み・やり方がここに入ります。",
       semantic: "まだありません。決定や事実がここに入ります。", episode: "まだありません。出来事や、記憶を書き換えた経緯がここに入ります。" };

@@ -3,7 +3,7 @@ import threading
 import pytest
 
 from exobrain.bookshelf import read_body
-from exobrain.brain import HEBBIAN_RATE, W_ABOUT, W_SAME_REPORT, Brain, InvalidInput
+from exobrain.brain import HEBBIAN_RATE, W_ABOUT_MAIN, W_SAME_REPORT, Brain, InvalidInput
 from exobrain.tokens import estimate_tokens
 
 from .conftest import report
@@ -43,7 +43,7 @@ def test_link_weights(brain, session):
     r = report(brain, session, ELEMENTS)
     ep, proc, _ = (n["id"] for n in r["nodes"])
     kinds = {(e["kind"], e["weight"]) for e in brain.edges_of(ep)}
-    assert ("about", W_ABOUT) in kinds and ("association", W_SAME_REPORT) in kinds
+    assert ("about", W_ABOUT_MAIN) in kinds and ("association", W_SAME_REPORT) in kinds  # its main topic
     # episode and procedural both point at the shared concept 進め方
     shared = {e["dst"] for e in brain.edges_of(ep) if e["kind"] == "about"} & \
              {e["dst"] for e in brain.edges_of(proc) if e["kind"] == "about"}

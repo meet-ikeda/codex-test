@@ -186,3 +186,22 @@ def test_confirmed_rules_are_written_only_between_exobrains_markers(brain, sessi
     text = f.read_text(encoding="utf-8")
     assert text.count(rules_export.START) == 1 and "- 数字は半角で書く" in text and "- テストを先に流す" in text
     assert not rules_export.enabled(brain)  # off unless the owner turns it on
+
+
+def test_strength_grows_with_use_and_fades_with_time():
+    from datetime import datetime, timedelta, timezone
+
+    from exobrain.recall import strength
+
+    now = datetime(2026, 10, 9, tzinfo=timezone.utc)
+    fresh = strength(1.0, 1, 0, 0, 0, now.isoformat(), 0, now)
+    used = strength(1.0, 3, 5, 1, 0, now.isoformat(), 0, now)
+    old = strength(1.0, 3, 5, 1, 0, (now - timedelta(days=60)).isoformat(), 0, now)
+    pinned = strength(1.0, 1, 0, 0, 0, (now - timedelta(days=60)).isoformat(), 1, now)
+    assert 0.3 < fresh < 0.4 and used > 0.9 and abs(old - used / 4) < 1e-9 and pinned == fresh
+
+
+def test_a_memory_is_tied_most_to_its_main_topic(brain, session):
+    nid = brain.remember_explicit(session, "見出しはいつも短くする", "procedural", ["見出し", "コピー", "LP"])["node_id"]
+    weights = sorted((e["weight"] for e in brain.edges_of(nid) if e["kind"] == "about"), reverse=True)
+    assert weights[0] == 0.8 and weights[0] > weights[1] > weights[2]

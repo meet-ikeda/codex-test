@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .recall import strength_sql
+
 if TYPE_CHECKING:
     from .brain import Brain
 
@@ -33,7 +35,7 @@ def targets() -> list[Path]:
 def block(brain: Brain) -> str:
     rows = brain._conn.execute(
         "SELECT body FROM nodes WHERE kind = 'procedural' AND status = 'active' AND stage = 'confirmed'"
-        " AND COALESCE(scope, '') = '' ORDER BY pinned DESC, importance * base_strength DESC LIMIT ?",
+        " AND COALESCE(scope, '') = '' ORDER BY pinned DESC, importance * " + strength_sql() + " DESC LIMIT ?",
         (MAX_RULES,)).fetchall()
     lines = [START, "## オーナー（池田さん）の本決まりのルール（exobrain から）", ""]
     lines += [f"- {r[0]}" for r in rows] or ["- （まだありません）"]

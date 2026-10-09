@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .recall import strength, strength_sql
+
 if TYPE_CHECKING:
     from .brain import Brain
 
@@ -24,7 +26,8 @@ def _concepts_of(brain: Brain, node_id: str) -> list[str]:
 def _row(brain: Brain, r) -> dict[str, Any]:
     return {"id": r["id"], "kind": r["kind"], "text": r["body"] or r["label"], "pinned": bool(r["pinned"]),
             "promoted_by": r["promoted_by"], "about": r["about"] or "owner", "subject": r["subject"],
-            "importance": round(r["importance"], 2), "strength": round(r["base_strength"], 2),
+            "importance": round(r["importance"], 2), "strength": round(strength(r["base_strength"], r["occurrences"], r["access_count"], r["goods"],
+                                      r["corrections"], r["last_activated_at"] or r["created_at"], r["pinned"]), 2),
             "times_recalled": r["access_count"], "corrections": r["corrections"], "goods": r["goods"],
             "created_at": r["created_at"][:10], "concepts": _concepts_of(brain, r["id"])}
 
@@ -36,7 +39,7 @@ def overview(brain: Brain) -> dict[str, Any]:
     rules = c.execute(f"SELECT * FROM nodes WHERE {active} AND pinned = 1 ORDER BY importance DESC").fetchall()
     strongest = c.execute(
         f"SELECT * FROM nodes WHERE {active} AND pinned = 0"
-        " ORDER BY importance * base_strength * (1 + corrections + goods) DESC LIMIT 15").fetchall()
+        " ORDER BY importance * " + strength_sql() + " * (1 + corrections + goods) DESC LIMIT 15").fetchall()
     topics = c.execute(
         "SELECT c.label, c.concept_type, COUNT(*) AS n FROM edges e JOIN nodes c ON c.kind = 'concept'"
         " AND c.id IN (e.src, e.dst) WHERE e.kind = 'about' GROUP BY c.id ORDER BY n DESC LIMIT 25").fetchall()
@@ -74,7 +77,7 @@ def memories(brain: Brain, kind: str = "", query: str = "", topic: str = "", lim
     sql = " AND ".join(where)
     total = brain._conn.execute(f"SELECT COUNT(*) FROM nodes n WHERE {sql}", args).fetchone()[0]
     rows = brain._conn.execute(
-        f"SELECT n.* FROM nodes n WHERE {sql} ORDER BY n.pinned DESC, n.importance * n.base_strength DESC,"
+        f"SELECT n.* FROM nodes n WHERE {sql} ORDER BY n.pinned DESC, n.importance * " + strength_sql("n.") + " DESC,"
         " n.created_at DESC LIMIT ? OFFSET ?", [*args, max(1, min(limit, 100)), max(0, offset)]).fetchall()
     return {"total": total, "memories": [_row(brain, r) for r in rows]}
 

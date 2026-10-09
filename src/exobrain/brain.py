@@ -20,7 +20,7 @@ from typing import Any, Iterable
 from . import events
 from .bookshelf import body_sha256, read_body, write_original
 from .config import Settings
-from .recall import Recaller, pack
+from .recall import Recaller, pack, strength_sql
 from .tokens import estimate_tokens
 
 # Design values (docs/design.md). Tune with real use.
@@ -32,6 +32,7 @@ CONCEPTS_MAX = 8
 CONCEPT_LEN_MAX = 40
 LABEL_LEN = 40
 W_ABOUT = 0.5
+W_ABOUT_MAIN = 0.8  # a memory's main topic; side topics get 0.8 / sqrt(rank + 1)
 W_SAME_REPORT = 0.3
 HEBBIAN_RATE = 0.1
 PROFILE_BUDGET = 500
@@ -265,6 +266,9 @@ class Brain:
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.execute("PRAGMA busy_timeout = 10000")
         self._conn.execute("PRAGMA secure_delete = ON")  # erased content is overwritten, not just unlinked
+        from .recall import strength as _strength
+
+        self._conn.create_function("strength", 7, lambda *a: _strength(*a), deterministic=False)
         self._conn.executescript(events.SCHEMA + PROJECTION_SCHEMA)
         self._migrate()
         self.fts_secure_delete = self._enable_fts_secure_delete()
@@ -624,8 +628,10 @@ class Brain:
                                              **({"promoted_by": promoted_by} if promoted_by else {}),
                                              **(extra or {})})
             concept_ids = [self._concept_id(actor, c, el.concept_meta.get(c)) for c in el.concepts]
-            for cid in concept_ids:
-                self._link(actor, nid, cid, "about", W_ABOUT, "ai")
+            for rank, cid in enumerate(concept_ids):
+                # The first topic is what the memory is mainly about (names marked [[ ]] come first); the rest
+                # are side topics, joined more loosely (2026-10-09; it used to be 0.5 for every topic).
+                self._link(actor, nid, cid, "about", round(W_ABOUT_MAIN / (rank + 1) ** 0.5, 3), "ai")
             created.append({"id": nid, "kind": el.kind, "label": make_label(el.text),
                             "concepts": el.concepts})
         # Things learned together are linked together.
@@ -908,7 +914,7 @@ class Brain:
         rows = self._conn.execute(
             "SELECT id, kind, body FROM nodes WHERE status = 'active' AND kind = 'procedural'"
             " AND (pinned = 1 OR (stage = 'confirmed' AND COALESCE(scope, '') = ''))"
-            " ORDER BY pinned DESC, importance * base_strength DESC, access_count DESC, created_at DESC"
+            " ORDER BY pinned DESC, importance * " + strength_sql() + " DESC, access_count DESC, created_at DESC"
         )
         lines, used = [], 0
         for r in rows:
