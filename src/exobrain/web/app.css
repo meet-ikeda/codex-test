@@ -325,3 +325,8 @@ body.intro-on { overflow: hidden; }
 @media (max-width: 900px) {
   .memory-wrap { margin-left: 0; padding: 330px 18px 80px; max-width: none; }
 }
+.memory-views { display: flex; flex-wrap: wrap; gap: 18px; margin: 26px 0 0; border-bottom: 1px solid var(--rule); }
+.memory-views button { background: none; border: 0; padding: 0 0 8px; cursor: pointer; font: 500 12px var(--f-sans);
+  letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid transparent; margin-bottom: -1px; }
+.memory-views button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.memory-tokens { margin: 10px 0 0; font-size: 11.5px; }

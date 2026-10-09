@@ -317,18 +317,61 @@
     return bits.filter(Boolean).join(" · ");
   }
 
-  let shown = null, polling = 0;
-  async function load(force = false) {
-    const m = await api("/api/memory");
-    generating = !!m.running;
-    $("#memory-meta").textContent = describe(m);
-    $("#memory-write").disabled = !!m.running;
-    if (m.markdown && (force || m.markdown !== shown)) { shown = m.markdown; reveal(m.markdown); }
+  const n = (x) => Number(x || 0).toLocaleString("ja-JP");
+  function cortexTokens(m) {
+    const u = m.usage || {};
+    if (!m.markdown || !u.digest_tokens) return "";
+    return `読んだ記憶 ${n(u.read)} / ${n(u.total)} 件 · AI に渡した量 約 ${n(u.digest_tokens)} トークン`
+      + `（Claude Code の決まった前置きを含む入力は ${n(u.input_tokens)}・出力 ${n(u.output_tokens)}）`
+      + (u.model ? ` · ${u.model}` : "") + (m.cost_usd != null ? ` · 料金換算 約 $${Number(m.cost_usd).toFixed(3)}` : "");
+  }
+
+  function showRecall(r) { // what an AI receives on "/思い出して" (spec v0.8 §8.1)
+    const lines = r.profile.split("\n").filter((x) => x.startsWith("- "));
+    const parts = [el("h2", { class: "mb on" }, "「/思い出して」で AI に渡すもの"),
+      el("h3", { class: "mb on" }, "1. 会話の最初に、いつも渡すもの"),
+      el("p", { class: "mb on" }, `本決まりで、どの仕事にも当てはまるルールだけ。いまは ${r.rules_shown} 件`
+        + (r.rules_total > r.rules_shown ? `（全 ${r.rules_total} 件のうち、上限 ${n(r.profile_budget)} トークンに入る分）` : "") + "。"),
+      lines.length ? el("ul", { class: "mb on" }, lines.map((x) => el("li", {}, inline(x.slice(2))))) :
+        el("p", { class: "mb on hint" }, "まだ本決まりのルールはありません。ルールは事例から育ち、あなたが「そう」と言うと本決まりになります。"),
+      el("h3", { class: "mb on" }, "2. そのあと、話題ごとに思い出すもの"),
+      el("p", { class: "mb on" }, `AI が「/思い出して」で話題を渡すたびに、関係する記憶を大脳皮質 → 海馬 → 本棚の順に探し、`
+        + `1 回あたり最大 ${n(r.recall_budget)} トークンにまとめて渡します。何が入るかは、その時の話題で変わります。`)];
+    doc.replaceChildren(...parts);
+    $("#memory-tokens").textContent = `会話の最初: 約 ${n(r.profile_tokens)} トークン（上限 ${n(r.profile_budget)}） · 思い出すたび: 最大 ${n(r.recall_budget)} トークン`;
+  }
+
+  let shown = null, polling = 0, view = "cortex", last_m = null;
+  function setView(v) {
+    view = v;
+    $("#mv-cortex").setAttribute("aria-selected", String(v === "cortex"));
+    $("#mv-recall").setAttribute("aria-selected", String(v === "recall"));
+    $("#memory-write").hidden = v !== "cortex";
+    $("#memory-meta").hidden = v !== "cortex";
+    shown = null;
+    if (last_m) render(last_m);
+  }
+  $("#mv-cortex").addEventListener("click", () => setView("cortex"));
+  $("#mv-recall").addEventListener("click", () => setView("recall"));
+
+  function render(m) {
+    if (view === "recall") { showRecall(m.recall_view); return; }
+    $("#memory-tokens").textContent = cortexTokens(m);
+    if (m.markdown && m.markdown !== shown) { shown = m.markdown; reveal(m.markdown); }
     if (!m.markdown && !m.running) {
       doc.replaceChildren(el("p", { class: "mb on hint" },
         "まだ memory.md はありません。「いま読み直す」を押すと、大脳皮質の記憶を読んで作ります（1〜2 分。Claude Code を使います）。"
         + " 睡眠のあとにも自動で作り直します。"));
     }
+  }
+
+  async function load() {
+    const m = await api("/api/memory");
+    last_m = m;
+    generating = !!m.running;
+    $("#memory-meta").textContent = describe(m);
+    $("#memory-write").disabled = !!m.running;
+    render(m);
     clearTimeout(polling);
     if (m.running) polling = setTimeout(() => guarded(() => load()), 3000);
   }

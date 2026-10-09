@@ -32,3 +32,22 @@ def test_save_flags_ids_that_are_not_in_the_brain_and_read_reports_changes(brain
 
 def test_no_memory_md_yet(brain):
     assert portrait.read(brain) == {"markdown": None}
+
+
+def test_the_whole_cortex_is_read_and_the_recall_view_shows_what_an_ai_receives(brain, session):
+    for i in range(70):  # more than the old per-kind limit (60 rules)
+        brain.remember_explicit(session, f"ルール{i}: 報告はいつも結論から書く", "procedural")
+    text, counts = portrait.digest(brain)
+    assert counts["procedural"] == 70 and text.count("（本決まり）") == 70
+    view = portrait.recall_view(brain)
+    assert view["rules_total"] == 70 and 0 < view["rules_shown"] <= 70 and view["profile_tokens"] <= view["profile_budget"]
+
+
+def test_each_job_has_its_model(brain):
+    import json
+
+    from exobrain.models import model_for
+
+    assert model_for(brain, "sleep") == "claude-sonnet-5-5" and model_for(brain, "summary") == "claude-haiku-5-5"
+    (brain.settings.home / "config.json").write_text(json.dumps({"models": {"sleep": "claude-opus-5-5"}}))
+    assert model_for(brain, "sleep") == "claude-opus-5-5" and model_for(brain, "screen") == "claude-haiku-5-5"

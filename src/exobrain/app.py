@@ -213,7 +213,7 @@ class App:
     def memory(self) -> dict[str, Any]:
         from . import portrait
 
-        return {**portrait.read(self.brain), **self.memory_state}
+        return {**portrait.read(self.brain), **self.memory_state, "recall_view": portrait.recall_view(self.brain)}
 
     def write_memory(self) -> dict[str, Any]:
         from . import portrait

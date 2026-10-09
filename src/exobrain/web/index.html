@@ -286,8 +286,13 @@
     <header class="room-head memory-head">
       <p class="room">Room 06</p>
       <h1 class="display">memory.md</h1>
-      <p class="lede">大脳皮質の記憶をすべて読み、この脳が何を思っているかを 1 ページにしたもの。AI の読みであって、脳そのものではありません。文末の番号は根拠の記憶で、押すとその記憶を開きます。</p>
+      <p class="lede">大脳皮質の記憶をすべて AI に読ませ、この脳が何を思っているかを 1 ページにしたもの。AI の読みであって、脳そのものではありません。文末の番号は根拠の記憶で、押すとその記憶を開きます。</p>
+      <div class="memory-views" role="tablist" aria-label="見かた">
+        <button id="mv-cortex" role="tab" aria-selected="true">大脳皮質ぜんぶの読み</button>
+        <button id="mv-recall" role="tab" aria-selected="false">「/思い出して」で AI に渡すもの</button>
+      </div>
       <div class="row memory-actions"><button id="memory-write" class="btn ghost">いま読み直す</button><span id="memory-meta" class="cap"></span></div>
+      <p id="memory-tokens" class="hint memory-tokens"></p>
     </header>
     <article id="memory-doc" class="memory-doc" aria-live="polite"></article>
   </div>

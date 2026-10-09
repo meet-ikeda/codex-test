@@ -120,7 +120,10 @@ def ask_claude(brain: Brain, items_text: str) -> dict[str, dict] | None:
     if exe is None:
         return None
     try:
-        proc = subprocess.run([exe, "-p", "--output-format", "json", "--disallowedTools", NO_TOOLS],
+        from .models import model_for
+
+        proc = subprocess.run([exe, "-p", "--model", model_for(brain, "screen"), "--output-format", "json",
+                               "--disallowedTools", NO_TOOLS],
                               input=PROMPT.format(items=items_text), capture_output=True, text=True,
                               timeout=TIMEOUT_SECONDS, cwd=str(brain.settings.home), env=os.environ.copy())
         out = json.loads(proc.stdout)

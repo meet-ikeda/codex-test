@@ -924,6 +924,8 @@ def find_claude(brain: Brain) -> str | None:
 
 def claude_runner(brain: Brain, run_id: str) -> str:
     """Stage B: run Claude Code headless with only the sleep tools of exobrain."""
+    from .models import model_for
+
     exe = find_claude(brain)
     if exe is None:
         return "Claude Code が見つからないため、AI による整理は行いませんでした（次の睡眠で行います）。"
@@ -935,7 +937,8 @@ def claude_runner(brain: Brain, run_id: str) -> str:
         config_path = f.name
     try:
         proc = subprocess.run(
-            [exe, "-p", SLEEP_PROMPT, "--mcp-config", config_path, "--strict-mcp-config",
+            [exe, "-p", SLEEP_PROMPT, "--model", model_for(brain, "sleep"), "--mcp-config", config_path,
+             "--strict-mcp-config",
              "--allowedTools", f"mcp__{SLEEP_SERVER}", "--output-format", "json"],
             capture_output=True, text=True, timeout=AI_TIMEOUT_SECONDS, cwd=str(brain.settings.home),
             env={**os.environ, **env},

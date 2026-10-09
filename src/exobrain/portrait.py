@@ -25,7 +25,8 @@ FILE = "memory.md"
 META = "memory.json"
 TIMEOUT_SECONDS = 600
 ID = re.compile(r"\[(n_[0-9a-f]+)\]")
-LIMITS = {"procedural": 60, "semantic": 80, "case": 50, "episode": 30}
+KINDS = ("procedural", "semantic", "case", "episode")
+DIGEST_MAX_TOKENS = 60_000  # the whole cortex, until it outgrows this; then the weakest memories are left out
 NO_TOOLS = "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,TodoWrite"
 PROMPT = """\
 あなたは exobrain（オーナー＝池田さんの外部脳）の中身を、オーナー本人に「この脳は何を思っているか」として
@@ -65,11 +66,25 @@ def digest(brain: Brain) -> tuple[str, dict[str, int]]:
     c = brain._conn
     parts, counts = [], {}
     titles = {"procedural": "ルール", "semantic": "知識", "case": "事例（そのときの判断）", "episode": "出来事"}
-    for kind, limit in LIMITS.items():
-        rows = c.execute(
+    from .tokens import estimate_tokens
+
+    # Strongest first, so that if the cortex outgrows the budget only the weakest are left out.
+    ranked = c.execute(
+        "SELECT id FROM nodes WHERE status = 'active' AND kind IN ('procedural', 'semantic', 'case', 'episode')"
+        " ORDER BY pinned DESC, importance * base_strength DESC, access_count DESC, created_at DESC").fetchall()
+    keep, used = set(), 0
+    for (nid,) in ranked:
+        cost = estimate_tokens(c.execute("SELECT COALESCE(body, '') || COALESCE(case_json, '') FROM nodes WHERE id = ?",
+                                         (nid,)).fetchone()[0]) + 25
+        if used + cost > DIGEST_MAX_TOKENS:
+            break
+        keep.add(nid)
+        used += cost
+    for kind in KINDS:
+        rows = [r for r in c.execute(
             "SELECT id, body, stage, scope, case_json, created_at, about, subject FROM nodes"
             " WHERE status = 'active' AND kind = ? ORDER BY pinned DESC, importance * base_strength DESC,"
-            " access_count DESC, created_at DESC LIMIT ?", (kind, limit)).fetchall()
+            " access_count DESC, created_at DESC", (kind,)).fetchall() if r["id"] in keep]
         counts[kind] = c.execute("SELECT COUNT(*) FROM nodes WHERE status = 'active' AND kind = ?",
                                  (kind,)).fetchone()[0]
         parts.append(f"## {titles[kind]}（{counts[kind]} 件中 {len(rows)} 件）")
@@ -105,11 +120,16 @@ def write(brain: Brain) -> dict[str, Any]:
     exe = find_claude(brain)
     if exe is None:
         raise RuntimeError("Claude Code（claude コマンド）が見つからないため、要約を作れませんでした。")
+    from .tokens import estimate_tokens
+
     text, counts = digest(brain)
     now = datetime.now().astimezone()
     prompt = PROMPT.format(now=f"{now:%Y-%m-%d %H:%M}", digest=text)
     try:
-        proc = subprocess.run([exe, "-p", "--output-format", "json", "--disallowedTools", NO_TOOLS],
+        from .models import model_for
+
+        proc = subprocess.run([exe, "-p", "--model", model_for(brain, "summary"), "--output-format", "json",
+                               "--disallowedTools", NO_TOOLS],
                               input=prompt, capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
                               cwd=str(brain.settings.home), env=os.environ.copy())
     except subprocess.TimeoutExpired:
@@ -121,10 +141,16 @@ def write(brain: Brain) -> dict[str, Any]:
     body = (out.get("result") or "").strip()
     if proc.returncode != 0 or not body or out.get("is_error"):
         raise RuntimeError("要約を作れませんでした: " + (proc.stderr.strip() or body or f"終了コード {proc.returncode}")[:300])
-    return save(brain, body, counts, now, out.get("total_cost_usd"))
+    u = out.get("usage") or {}
+    usage = {"model": next(iter(out.get("modelUsage") or {}), None), "digest_tokens": estimate_tokens(text),
+             "input_tokens": u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
+             + u.get("cache_creation_input_tokens", 0), "output_tokens": u.get("output_tokens", 0),
+             "read": sum(1 for line in text.splitlines() if line.startswith("- ")), "total": sum(counts.values())}
+    return save(brain, body, counts, now, out.get("total_cost_usd"), usage)
 
 
-def save(brain: Brain, body: str, counts: dict[str, int], now: datetime, cost: float | None = None) -> dict[str, Any]:
+def save(brain: Brain, body: str, counts: dict[str, int], now: datetime, cost: float | None = None,
+         usage: dict | None = None) -> dict[str, Any]:
     """Check the cited ids, add the header and footer, and keep the file (and its copy on Drive)."""
     known = {r[0] for r in brain._conn.execute("SELECT id FROM nodes WHERE status = 'active'")}
     cited = ID.findall(body)
@@ -139,7 +165,7 @@ def save(brain: Brain, body: str, counts: dict[str, int], now: datetime, cost: f
     home = brain.settings.home
     (home / FILE).write_text(text, encoding="utf-8")
     meta = {"generated_at": now.isoformat(timespec="seconds"), "counts": counts, "cited": len(set(cited)),
-            "unknown_ids": unknown, "cost_usd": cost,
+            "unknown_ids": unknown, "cost_usd": cost, "usage": usage or {},
             "events_at": brain._conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0]}
     (home / META).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
@@ -158,3 +184,17 @@ def read(brain: Brain) -> dict[str, Any]:
         "SELECT COUNT(*) FROM events WHERE id > ? AND type IN ('node_added', 'node_updated', 'node_revised')",
         (meta.get("events_at", 0),)).fetchone()[0]
     return {"markdown": (home / FILE).read_text(encoding="utf-8"), **meta, "changes_since": changed}
+
+
+def recall_view(brain: Brain) -> dict[str, Any]:
+    """What an AI actually receives on "/思い出して": the start of the conversation (start_session's profile),
+    and then up to the recall budget each time it recalls (spec v0.8 §8.1)."""
+    from .brain import PROFILE_BUDGET, RECALL_BUDGET
+    from .tokens import estimate_tokens
+
+    profile = brain.profile(PROFILE_BUDGET)
+    rules = sum(1 for line in profile.splitlines() if line.startswith("- "))
+    total = brain._conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'active' AND kind = 'procedural'"
+                                " AND (pinned = 1 OR (stage = 'confirmed' AND COALESCE(scope, '') = ''))").fetchone()[0]
+    return {"profile": profile, "profile_tokens": estimate_tokens(profile), "profile_budget": PROFILE_BUDGET,
+            "rules_shown": rules, "rules_total": total, "recall_budget": RECALL_BUDGET}

@@ -50,7 +50,9 @@ def ask(brain: Brain, question: str | None) -> int:
         print("Claude Code（claude コマンド）が見つかりません。docs/setup-mac.md の手順 2 で入れてください。", file=sys.stderr)
         return 2
     config_path, env = _config(brain)
-    args = [exe, "--mcp-config", config_path, "--strict-mcp-config", "--allowedTools", f"mcp__{SERVER}",
+    from .models import model_for
+
+    args = [exe, "--model", model_for(brain, "ask"), "--mcp-config", config_path, "--strict-mcp-config", "--allowedTools", f"mcp__{SERVER}",
             "--append-system-prompt", SYSTEM]
     try:
         if question:
