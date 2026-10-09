@@ -291,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
                 from . import repromote
 
                 p = repromote.plan(brain, a.since)
-                print(f"{a.since} 以降の原文 {len(p['sources'])} 件を海馬に戻し、次の睡眠から覚え直します。\n"
+                print(f"{a.since} 以降の原文 {len(p['sources'])} 件を預かりBOX に戻し、精査してから次の睡眠で覚え直します。\n"
                       f"- 睡眠が作った記憶 {len(p['retire'])} 件を外します（履歴とつながりは残ります）\n"
                       f"- オーナーが直接入れた記憶 {p['kept']} 件は残します。うちルール {len(p['confirm'])} 件を本決まりにします\n"
                       "- 先にバックアップを取ります。消すものはありません")
