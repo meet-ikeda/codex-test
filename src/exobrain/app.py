@@ -173,8 +173,11 @@ class App:
                                                     n["goods"], n["corrections"],
                                                     n["last_activated_at"] or n["created_at"], n["pinned"]), 2),
                          "case": json.loads(n["case_json"]) if n["case_json"] else None},
+                # a rule's receipts: the cases behind it (and against it), each with its quoted original
                 "derived_from": [dict(r) for r in b._conn.execute(
-                    "SELECT x.id, x.body, e.kind AS link FROM edges e JOIN nodes x ON x.id = e.dst"
+                    "SELECT x.id, x.body, e.kind AS link, x.created_at,"
+                    " (SELECT quote FROM node_sources WHERE node_id = x.id ORDER BY at LIMIT 1) AS quote"
+                    " FROM edges e JOIN nodes x ON x.id = e.dst"
                     " WHERE e.src = ? AND e.kind IN ('derived_from', 'contradicted_by')", (node_id,))],
                 "neighbors": nbrs[:40], "source": source, "shelves": shelves,
                 "revisions": [dict(r) for r in b._conn.execute(

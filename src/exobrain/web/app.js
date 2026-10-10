@@ -403,10 +403,15 @@ function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes
     for (const q of quotes) parts.push(el("blockquote", { class: "quote" }, q.quote,
       el("button", { class: "link cap", on: { click: () => openSource(q.source_id) } }, `${when(q.created_at, false)} — ${q.title}`)));
   }
-  if (derived_from.length) {
-    parts.push(el("div", { class: "section-title" }, cap("Grown from — 元の事例"), cap(pad(derived_from.length, 2))));
-    for (const d of derived_from) parts.push(el("div", { class: "nbr", on: { click: () => focusNode(d.id) } },
-      glyph("case"), el("span", { class: "t" }, (d.link === "contradicted_by" ? "合わなかった: " : "") + d.body)));
+  if (derived_from.length) { // a rule's receipts (spec v0.8 §6.2)
+    const support = derived_from.filter((d) => d.link === "derived_from"), against = derived_from.filter((d) => d.link !== "derived_from");
+    parts.push(el("div", { class: "section-title" }, cap("Evidence — 根拠の事例"),
+      cap(`根拠 ${support.length} 件${against.length ? `・合わない ${against.length} 件` : ""}`)));
+    for (const d of [...support, ...against]) {
+      parts.push(el("div", { class: "nbr", on: { click: () => focusNode(d.id) } },
+        glyph("case"), el("span", { class: "t" }, (d.link === "contradicted_by" ? "合わなかった: " : "") + d.body)));
+      if (d.quote) parts.push(el("blockquote", { class: "quote" }, d.quote, el("span", { class: "cap" }, ` — ${when(d.created_at, false)}`)));
+    }
   }
   if (revisions.length) {
     parts.push(el("div", { class: "section-title" }, cap("Rewritten — 書き換えの履歴"), cap(pad(revisions.length, 2))));

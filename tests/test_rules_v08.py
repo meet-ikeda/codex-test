@@ -205,3 +205,20 @@ def test_a_memory_is_tied_most_to_its_main_topic(brain, session):
     nid = brain.remember_explicit(session, "見出しはいつも短くする", "procedural", ["見出し", "コピー", "LP"])["node_id"]
     weights = sorted((e["weight"] for e in brain.edges_of(nid) if e["kind"] == "about"), reverse=True)
     assert weights[0] == 0.8 and weights[0] > weights[1] > weights[2]
+
+
+def test_a_grown_rule_shows_its_receipts(brain, session):
+    """Spec v0.8 §6.2: a rule carries the count of cases behind it (and against it)."""
+    a = _case(brain, "見出しを言い切りにした", "目を止めたい", "2026-10-01")
+    b = _case(brain, "見出しを短くした", "目を止めたい", "2026-10-02")
+    _, item = next(grow.candidates(brain, set(), sleep._marked))
+    with brain._tx():
+        grow.apply(brain, "sleep", item, grow.validate(item, {"new": [
+            {"text": "流し読みされる見出しは言い切る", "reason": "目を止めたい", "case_ids": [a, b]}]}))
+    rule = brain.rules_to_review()[0]["id"]
+    assert brain._recaller.evidence_counts([rule]) == {rule: (2, 0)}
+    from exobrain import portrait
+
+    assert "根拠 2 件" in portrait.digest(brain)[0]
+    r = brain.recall(session, "流し読みされる見出しは言い切る")
+    assert "（根拠 2 件）" in r["context"]

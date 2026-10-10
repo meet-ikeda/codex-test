@@ -94,6 +94,9 @@ def digest(brain: Brain) -> tuple[str, dict[str, int]]:
             tags = []
             if kind == "procedural":
                 tags.append({"confirmed": "本決まり", "tentative": "仮"}.get(r["stage"], "未整理"))
+                ev = brain._recaller.evidence_counts([r["id"]]).get(r["id"])
+                if ev:
+                    tags.append(f"根拠 {ev[0]} 件" + (f"・合わない {ev[1]} 件" if ev[1] else ""))
             if r["scope"]:
                 tags.append(f"場面: {r['scope']}")
             if r["about"] and r["about"] != "owner":

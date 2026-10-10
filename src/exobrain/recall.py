@@ -118,6 +118,7 @@ class Hit:
     path: list[str]  # node ids from a seed to this node
     stage: str | None = None  # rules: tentative | confirmed | None (not yet sorted, spec v0.8 §11.3)
     scope: str | None = None
+    evidence: tuple[int, int] | None = None  # rules: (cases behind it, cases that did not fit) — spec v0.8 §6.2
 
 
 class Recaller:
@@ -254,6 +255,17 @@ class Recaller:
         q = ",".join("?" * len(ids))
         return {r[0]: r[1] for r in self.conn.execute(f"SELECT id, label FROM nodes WHERE id IN ({q})", ids)}
 
+    def evidence_counts(self, ids: list[str]) -> dict[str, tuple[int, int]]:
+        """How many cases stand behind each rule, and how many went against it (spec v0.8 §6.2)."""
+        out: dict[str, tuple[int, int]] = {}
+        for nid in ids:
+            row = self.conn.execute(
+                "SELECT SUM(kind = 'derived_from'), SUM(kind = 'contradicted_by') FROM edges WHERE src = ?"
+                " AND kind IN ('derived_from', 'contradicted_by')", (nid,)).fetchone()
+            if row and (row[0] or row[1]):
+                out[nid] = (int(row[0] or 0), int(row[1] or 0))
+        return out
+
     def standing_rules(self, exclude: set[str], limit: int = 20) -> list[Hit]:
         """Strongest confirmed rules for all work, used to fill the rules share when the cue activates few."""
         rows = self.conn.execute(
@@ -281,6 +293,8 @@ def _source_note(hit: Hit) -> str:
 
 def format_line(hit: Hit) -> str:
     where = f"（{hit.scope} の中だけ）" if hit.scope else ""
+    if hit.evidence:  # a rule grown from cases says how many stand behind it
+        where += f"（根拠 {hit.evidence[0]} 件" + (f"・合わない {hit.evidence[1]} 件" if hit.evidence[1] else "") + "）"
     if hit.kind == "procedural":
         if hit.stage == "confirmed":
             return f"- {hit.body}{where} [{hit.id}]"
@@ -338,6 +352,8 @@ def pack(recaller: Recaller, hits: list[Hit], cue_ids: set[str], budget: int) ->
     rest = int(budget * RULES_SHARE) - sum(estimate_tokens(format_line(h)) + 1 for h in rules)
     rules = take(recaller.standing_rules(chosen), rest, out=rules)
     chosen |= {h.id for h in rules}
+    for h in rules:
+        h.evidence = recaller.evidence_counts([h.id]).get(h.id)
 
     # 2) Insights: reached through >= 2 hops, not matching the cue, not linked to the top answers.
     others = [h for h in hits if h.id not in chosen]
