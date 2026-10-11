@@ -138,6 +138,20 @@ def candidates(brain: Brain, done: set[str]) -> Iterator[tuple[Segment, str]]:
                 yield seg, text
 
 
+def source_groups(brain: Brain, done: set[str]) -> Iterator[list[tuple[Segment, str]]]:
+    """The waiting segments, one original at a time (2026-10-11, the owner chose this): a sleep reads one daily
+    log whole — the decision and the words behind it together — instead of section by section, each time
+    re-reading the conversation behind it."""
+    group: list[tuple[Segment, str]] = []
+    for seg, text in candidates(brain, done):
+        if group and group[0][0].source_id != seg.source_id:
+            yield group
+            group = []
+        group.append((seg, text))
+    if group:
+        yield group
+
+
 def _screened_segments(source_id: str, body: str, labels: dict[int, str]) -> list[Segment]:
     """Runs of lines that screening let in and that may go on to the cortex, with their signal: the owner's words
     are explicit, the owner's other kept sections summarized, lines tied to attention attended, small talk chatter.
@@ -274,12 +288,25 @@ OWNER_NOTE_HINT = (
     "（例: 「オーナーは〇〇社の採用サイトの構成を考えている」）。走り書きでも、読み取れることは拾う。")
 
 
-def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
-    s = brain._conn.execute("SELECT title, kind, author, ai_name, created_at FROM sources WHERE id = ?",
+SIGNAL_RANK = ("explicit", "demand", "summarized", "attended", "repetition", "chatter")
+ATOMS_PER_ITEM_MAX = 24
+
+
+def make_item(brain: Brain, seg: Segment | list[tuple[Segment, str]], text: str = "") -> dict[str, Any]:
+    group = seg if isinstance(seg, list) else [(seg, text)]
+    seg = group[0][0]
+    text = "\n".join(t for _, t in group)
+    s = brain._conn.execute("SELECT title, kind, author, ai_name, created_at, path FROM sources WHERE id = ?",
                             (seg.source_id,)).fetchone()
-    numbered = [[seg.line_start + i, line] for i, line in enumerate(text.splitlines())]
+    numbered = [[g.line_start + i, line] for g, t in group for i, line in enumerate(t.splitlines())]
     owner_note = s["kind"] in EXPLICIT_KINDS
-    limit = ATOMS_PER_OWNER_SEGMENT if owner_note else ATOMS_PER_SEGMENT
+    per_part = ATOMS_PER_OWNER_SEGMENT if owner_note else ATOMS_PER_SEGMENT
+    limit = min(per_part * len(group), ATOMS_PER_ITEM_MAX)
+    sections = _daily_sections(read_body(brain.settings.drive_root / s["path"])) if s["kind"] == "ai_daily" else []
+    parts = [{"part": k, "lines": [g.line_start, g.line_end], "signal": g.signal,
+              "heading": next((h for h, a, b in sections if a <= g.line_start <= b), "")}
+             for k, (g, _) in enumerate(group)]
+    signal = min((g.signal for g, _ in group), key=lambda x: SIGNAL_RANK.index(x) if x in SIGNAL_RANK else 9)
     meta_row = brain._conn.execute("SELECT meta_json FROM sources WHERE id = ?", (seg.source_id,)).fetchone()[0]
     meta = json.loads(meta_row) if meta_row else {}
     note_type, subject = meta.get("note_type"), meta.get("subject")
@@ -319,22 +346,29 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
             if all_lines:
                 evidence = {
                     "source_id": evidence_source_id,
-                    "lines": [[i, all_lines[i - 1]] for i in sorted(chosen)[:120]],
+                    "lines": [[i, all_lines[i - 1]] for i in sorted(chosen)[:120 + 40 * (len(group) - 1)]],
                 }
     return {
-        "type": "promote", "source_id": seg.source_id, "signal": seg.signal,
+        "type": "promote", "source_id": seg.source_id, "signal": signal, "parts": parts,
         "source": {"title": s["title"], "writer": s["ai_name"] if s["author"] == "ai" else "オーナー",
                    "date": meta.get("entry_date") or s["created_at"][:10]},  # when it happened, not when filed
-        "lines": numbered, "similar_memories": (similar := similar_memories(brain, text)),
-        "past_memories": past_memories(brain, text, {m["id"] for m in similar}),
+        "lines": numbered,
+        "similar_memories": (similar := similar_memories(brain, text, SIMILAR_SHOWN + 2 * (len(group) - 1))),
+        "past_memories": past_memories(brain, text, {m["id"] for m in similar}, PAST_SHOWN + 2 * (len(group) - 1)),
         "known_concepts": known_concepts(brain, text),
         "instructions": (
             NOTE_TYPE_HINT.get(note_type, "") + (f"（この話の相手: {subject}）" if subject else "")
             + (DEPOSIT_HINT if s["kind"] == "deposit" else OWNER_NOTE_HINT if owner_note and not note_type else "")
-            + f"この部分を、長く覚えておく価値のある「記憶の原子」に分ける（最大 {limit} 個。価値がなければ atoms を空に）。"
-            "記憶の主語はオーナー。原子は単独で意味が通る 1 文（300 文字以内）で、次に役立つ形に言い直す"
+            + (f"この部分を、長く覚えておく価値のある「記憶の原子」に分ける（最大 {limit} 個。価値がなければ atoms を空に）。"
+               if len(group) == 1 else
+               f"これは 1 本の日報のうち、海馬に残った部分（parts）をまとめて渡したもの。決定と、その理由や"
+               f"オーナーの言葉は別の part にあることが多いので、全体を読んでから記憶にする。"
+               f"長く覚えておく価値のある「記憶の原子」に分ける（全体で最大 {limit} 個）。1 つの原子の lines は"
+               "1 つの part の中に収める（part ごとに重みが違うため）。原子にしなかった part は、skipped に"
+               "{part: 番号, why: 理由}で必ず返す（返さない part は、次の睡眠でもう一度読む）。")
+            + "記憶の主語はオーナー。原子は単独で意味が通る 1 文（300 文字以内）で、次に役立つ形に言い直す"
             "（言葉を変えないのはオーナーの言葉だけ。口調や言い方の強さは episode の側にだけ残す）。"
-            + (CHATTER_HINT if seg.signal == "chatter" else "")
+            + (CHATTER_HINT if any(g.signal == "chatter" for g, _ in group) else "")
             + KIND_RULE + BUNDLE_RULE + SCOPE_RULE.format(project=project or "なし") + REASON_RULE +
             "derivation: verbatim（原文のまま）/ paraphrase（意味を変えずに整理）/ inferred（原文に直接はない推論）。"
             "lines: 日報内の根拠行 [開始, 終了]（lines にある番号だけ）。引用は書かない（プログラムが切り出す）。"
@@ -347,7 +381,7 @@ def make_item(brain: Brain, seg: Segment, text: str) -> dict[str, Any]:
             "about: その記憶が誰についてか（owner=オーナー / client=クライアント / interviewee=取材相手 / other）。"
             "owner 以外なら subject に誰か（会社名・人名・役割）を入れ、text の主語にもする。"
             + PERSONAL_INFO_RULE + "迷ったら統合しない。書かれていないことを足さない。"),
-        "max_atoms": limit, **({"note_type": note_type} if note_type else {}),
+        "max_atoms": limit, "_segments": [g.key for g, _ in group], **({"note_type": note_type} if note_type else {}),
         **({"project": project} if project else {}),
         **({"evidence": evidence} if evidence else {}),
     }
@@ -420,7 +454,8 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
     limit = item.get("max_atoms", ATOMS_PER_SEGMENT)
     if len(atoms) > limit:
         raise InvalidInput(f"この promote の atoms は {limit} 個までです。")
-    lo, hi = item["lines"][0][0], item["lines"][-1][0]
+    parts = item.get("parts") or [{"part": 0, "lines": [item["lines"][0][0], item["lines"][-1][0]],
+                                   "signal": item["signal"]}]
     known = {m["id"] for m in item["similar_memories"]}
     body_lines = {n: t for n, t in item["lines"]}
     evidence = item.get("evidence")
@@ -436,12 +471,16 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
         if der not in DERIVATIONS:
             raise InvalidInput(f"atoms[{i}].derivation は {', '.join(DERIVATIONS)} のいずれかです。")
         ln = a.get("lines")
-        if not (isinstance(ln, list) and len(ln) == 2 and all(isinstance(x, int) for x in ln) and lo <= ln[0] <= ln[1] <= hi):
-            raise InvalidInput(f"atoms[{i}].lines は [開始, 終了] で、{lo}〜{hi} の範囲にしてください。")
+        part = next((p for p in parts if isinstance(ln, list) and len(ln) == 2 and all(isinstance(x, int) for x in ln)
+                     and p["lines"][0] <= ln[0] <= ln[1] <= p["lines"][1]), None)
+        if part is None:
+            ranges = "、".join(f"{p['lines'][0]}〜{p['lines'][1]}" for p in parts)
+            raise InvalidInput(f"atoms[{i}].lines は [開始, 終了] で、1 つの part の範囲（{ranges}）に収めてください。")
+        signal = part["signal"]
         quote = "\n".join(body_lines[n] for n in range(ln[0], ln[1] + 1)).strip()
         if not quote:
             raise InvalidInput(f"atoms[{i}].lines の範囲が空行だけです。")
-        if kind == "procedural" and not (item["signal"] == "explicit" and GENERAL_WORDS.search(quote)):
+        if kind == "procedural" and not (signal == "explicit" and GENERAL_WORDS.search(quote)):
             raise InvalidInput(f"atoms[{i}] は 1 回の判断なので、procedural ではなく case にしてください"
                                "（ルールにしてよいのは、オーナー自身の言葉が「いつも」「今後」などで広く当てはまると"
                                "言っているときだけ。その行を lines に含める）。")
@@ -503,16 +542,16 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
                 scope = item["project"]  # a case belongs to its project unless said otherwise
         if about != "owner" and not subject and item.get("note_type"):
             raise InvalidInput(f"atoms[{i}] は {about} の話なので、subject に誰か（名前か役割）を入れてください。")
-        if item["signal"] == "chatter":
+        if signal == "chatter":
             if kind != "episode":
                 raise InvalidInput(f"atoms[{i}] は雑談なので、kind は episode にしてください。")
             if not text.startswith("雑談"):
                 text = f"雑談: {text}"[:TEXT_MAX]
         try:
-            weight = float(a.get("importance", IMPORTANCE[item["signal"]]))
+            weight = float(a.get("importance", IMPORTANCE[signal]))
         except (TypeError, ValueError):
             raise InvalidInput(f"atoms[{i}].importance は 0〜1 の数です。") from None
-        weight = round(max(0.0, min(weight, WEIGHT_CAP.get(item["signal"], 0.5))), 3)
+        weight = round(max(0.0, min(weight, WEIGHT_CAP.get(signal, 0.5))), 3)
         if case is not None:
             case["lesson"] = " ".join(str((a.get("case") or {}).get("lesson") or "").split())[:200]
         links = []
@@ -527,13 +566,26 @@ def validate(brain: Brain, item: dict, res: dict) -> list[dict]:
             if not local and to not in allowed:
                 raise InvalidInput(f"atoms[{i}].links[{k}].to には、原子の番号か similar_memories・past_memories の id を入れてください。")
             links.append({"to": to, "type": typ, "why": " ".join(str(ln_.get("why") or "").split())[:80]})
-        out.append({"kind": kind, "text": text, "derivation": der, "lines": ln, "quote": quote, "importance": weight,
+        out.append({"kind": kind, "text": text, "signal": signal, "part": part["part"], "derivation": der, "lines": ln, "quote": quote, "importance": weight,
                     "links": links,
                     "confidence": round(conf, 3), "concepts": concepts, "concept_meta": concept_meta, "about": about,
                     "scope": scope, "case": case, "subject": subject,
                     "same_as": a.get("same_as"), "supersedes": a.get("supersedes"),
                     "evidence_lines": evidence_range, "evidence_quote": evidence_quote})
     return out
+
+
+def judged_segments(item: dict, atoms: list[dict], res: dict) -> list[str]:
+    """The segments this answer settled: every part when it was one part; otherwise the parts some atom came from,
+    and the parts the AI said why it left out. A part neither used nor explained is read again next sleep."""
+    keys = item.get("_segments") or []
+    if len(keys) <= 1:
+        return keys
+    used = {a["part"] for a in atoms if "part" in a}
+    for sk in res.get("skipped") or []:
+        if isinstance(sk, dict) and isinstance(sk.get("part"), int) and str(sk.get("why") or "").strip():
+            used.add(sk["part"])
+    return [k for n, k in enumerate(keys) if n in used]
 
 
 def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, int]:
@@ -567,9 +619,9 @@ def apply(brain: Brain, actor: str, item: dict, atoms: list[dict]) -> dict[str, 
             ids.append(a["same_as"])
             continue
         created = brain._add_elements(
-            actor, [Element(a["kind"], a["text"], a["concepts"], a.get("importance", IMPORTANCE[item["signal"]]),
+            actor, [Element(a["kind"], a["text"], a["concepts"], a.get("importance", IMPORTANCE[a.get("signal", item["signal"])]),
                      a.get("concept_meta") or {})], src,
-            promoted_by=item["signal"], extra={"derivation": a["derivation"], "confidence": a["confidence"],
+            promoted_by=a.get("signal", item["signal"]), extra={"derivation": a["derivation"], "confidence": a["confidence"],
                                                "about": a["about"], **({"subject": a["subject"]} if a["subject"] else {}),
                                                **({"scope": a["scope"]} if a.get("scope") else {}),
                                                **({"case": a["case"]} if a.get("case") else {}),

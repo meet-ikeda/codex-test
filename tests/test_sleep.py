@@ -235,9 +235,11 @@ def test_daily_log_sections_decide_what_is_a_candidate(brain, session):
         {"id": ids[0], "label": "chatter", "why": "雑談"}, {"id": ids[1], "label": "drop", "why": "作業の記録"}]}])
     batch = sleep.next_batch(brain, state)
     promoted = [i for i in batch["items"] if i["type"] == "promote"]
-    signals = sorted(i["signal"] for i in promoted)
+    assert len(promoted) == 1  # the whole log at once (2026-10-11)
+    signals = sorted(p["signal"] for i in promoted for p in i["parts"])
     texts = "\n".join(t for i in promoted for _, t in i["lines"])
     assert signals == ["chatter", "summarized", "summarized"]  # an AI summed up the owner's sections
+    assert {p["heading"] for p in promoted[0]["parts"]} == {"前提・条件", "決まったこと", "あったこと"}
     assert "注意された" in texts and "写し" in texts and "雑談した" in texts
     assert "ファイルを開いた" not in texts  # tied to nothing: left on the bookshelf only
 

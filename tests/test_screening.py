@@ -124,3 +124,27 @@ def test_screening_runs_at_its_slots():
     (B.settings.home / "screened_at").write_text(datetime(2026, 10, 8, 12, 5, tzinfo=jst).isoformat())
     assert not screen.due(B, datetime(2026, 10, 8, 15, 0, tzinfo=jst))
     assert screen.due(B, datetime(2026, 10, 8, 16, 1, tzinfo=jst))
+
+
+def test_a_whole_log_is_read_at_once_and_every_part_is_answered_for(brain, session):
+    """2026-10-11 (the owner chose this): one daily log per item; parts neither used nor explained wait."""
+    brain.submit_daily_log(session, "相談", [], [], [], ["ロゴは黒一色にする"], [],
+                           reasons=["> 小さく刷っても読めることが大事"])
+    screen.run(brain)
+    groups = list(promote.source_groups(brain, set()))
+    assert len(groups) == 1 and len(groups[0]) == 2
+    item = promote.make_item(brain, groups[0])
+    decided, words = item["parts"]
+    import pytest
+    from exobrain.brain import InvalidInput
+
+    with pytest.raises(InvalidInput, match="1 つの part"):
+        promote.validate(brain, item, {"atoms": [{"kind": "semantic", "text": "x", "derivation": "paraphrase",
+                                                  "lines": [decided["lines"][0], words["lines"][1]]}]})
+    n = decided["lines"][0]
+    atoms = promote.validate(brain, item, {"atoms": [{"kind": "semantic", "text": "ロゴは黒一色",
+                                                      "derivation": "paraphrase", "lines": [n, n]}]})
+    assert atoms[0]["signal"] == decided["signal"]
+    assert promote.judged_segments(item, atoms, {}) == [item["_segments"][0]]  # the owner's words wait
+    assert promote.judged_segments(item, atoms, {"skipped": [{"part": 1, "why": "決定に含めた"}]}) == item["_segments"]
+    assert promote.judged_segments(item, atoms, {"skipped": [{"part": 1, "why": ""}]}) == [item["_segments"][0]]

@@ -82,7 +82,8 @@ screen（預かりBOX の日報の項目を、海馬に入れるか仕分ける�
 verify_links（つながりの確認）/ shelve（原文を棚に並べる）。
 結果の形: write_daily: {{item_id, project, status, decisions, rejected, conditions, reasons, events, unresolved, ai_notes, skip}}。
 write_deposit: {{item_id, summary, procedural, reasons, semantic, episodes, note_type, skip}}。
-promote: {{item_id, atoms: [{{kind, text, derivation, lines: [開始, 終了], evidence_lines?: [開始, 終了], confidence, concepts, scope, case?, same_as?, supersedes?}}]}}。
+promote: {{item_id, atoms: [{{kind, text, derivation, lines: [開始, 終了], evidence_lines?: [開始, 終了], confidence, concepts, scope, case?, same_as?, supersedes?}}], skipped?: [{{part, why}}]}}。
+（promote は日報 1 本ずつ。parts が 2 つ以上なら、原子にしなかった part を skipped に理由つきで返す）
 （kind が case のときは case: {{situation, decision, reason, reaction}} を付ける）
 grow_rules: {{item_id, new: [{{text, scope, reason, case_ids}}], updates: [{{rule_id, action: strengthen|weaken, case_ids}}]}}。
 screen: {{item_id, decisions: [{{id, label: related|chatter|drop, why}}]}}。
@@ -294,8 +295,8 @@ def _candidates(brain: Brain, state: SleepState, since: str):
 
     done = {r[0] for r in c.execute("SELECT key FROM sleep_marks WHERE kind = 'promoted'")}
     done |= {k[len("promote:"):] for k in state.handed if k.startswith("promote:")}
-    for seg, text in promote.candidates(brain, done):
-        yield f"promote:{seg.key}", {**promote.make_item(brain, seg, text), "_segment": seg.key}
+    for group in promote.source_groups(brain, done):  # one original at a time, whole (2026-10-11)
+        yield f"promote:{group[0][0].source_id}", promote.make_item(brain, group)
     # 3) Near-duplicate or conflicting knowledge and rules.
     recent = c.execute(
         "SELECT id, kind, body, created_at FROM nodes WHERE status = 'active' AND kind IN ('semantic', 'procedural')"
@@ -634,6 +635,8 @@ def next_batch(brain: Brain, state: SleepState) -> dict[str, Any]:
     state.batches_given += 1
     for it in items:
         state.handed.add(it["_key"])
+        if it["type"] == "promote":
+            state.handed.update(f"promote:{k}" for k in it["_segments"])
         if it["type"] == "verify_links":
             state.handed.update(f"link:{l['src']}|{l['dst']}" for l in it["links"])
         if it["type"] == "shelve":
@@ -689,7 +692,7 @@ def apply(brain: Brain, state: SleepState, batch_id: str, results: list[dict]) -
         elif t == "promote":
             from . import promote
 
-            plan.append((it, promote.validate(brain, it, res)))
+            plan.append((it, {"atoms": promote.validate(brain, it, res), "answer": res}))
         elif t == "write_deposit":
             sections = {"summary": " ".join(str(res.get("summary") or "").split())[:1000]}
             for key, out in (("procedural", "procedural"), ("reasons", "reasons"), ("semantic", "semantic"), ("episodes", "episode")):
@@ -769,11 +772,12 @@ def apply(brain: Brain, state: SleepState, batch_id: str, results: list[dict]) -
             if t == "promote":
                 from . import promote
 
-                counts = promote.apply(brain, ACTOR, it, res)
+                counts = promote.apply(brain, ACTOR, it, res["atoms"])
                 applied["nodes"] += counts["new"]
                 applied["superseded"] += counts["superseded"]
                 applied["reinforced"] = applied.get("reinforced", 0) + counts["reinforced"]
-                brain._emit(ACTOR, "sleep_mark", {"kind": "promoted", "key": it["_segment"]})
+                for key in promote.judged_segments(it, res["atoms"], res["answer"]):
+                    brain._emit(ACTOR, "sleep_mark", {"kind": "promoted", "key": key})
             elif t == "decompose":
                 created = brain._add_elements(ACTOR, res, it["source_id"])
                 applied["nodes"] += len(created)

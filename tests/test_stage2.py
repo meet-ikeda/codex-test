@@ -463,7 +463,8 @@ def test_deposit_from_chat_goes_through_the_hippocampus_as_explicit(brain, sessi
     batch = sleep.next_batch(brain, sleep.SleepState(run_id))
     items = [i for i in batch["items"] if i["type"] == "promote"]
     # The deposit is an AI's summary (one step weaker), except the owner's-words section (spec v0.8 §7.2).
-    assert items and all(i["signal"] in ("explicit", "summarized") and i["max_atoms"] == 8 for i in items)
+    assert items and all({p["signal"] for p in i["parts"]} <= {"explicit", "summarized"}
+                         and i["max_atoms"] == min(8 * len(i["parts"]), promote.ATOMS_PER_ITEM_MAX) for i in items)
     assert "預けると決めた会話" in items[0]["instructions"]
     assert brain.deposit(session, "採用サイトの相談", "採用サイトの構成を相談した。", ["見出しは短くする"],
                          ["オーナーはA社の採用サイトの構成を考えている"], ["9/27 に構成案を2つ出した"])["filed"] is False
