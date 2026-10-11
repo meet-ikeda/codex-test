@@ -243,7 +243,7 @@
 
   // ---- memory.md → the page ------------------------------------------------------------
 
-  const ID = /\[(n_[0-9a-f]+)(・脳に見当たらない)?\]/g;
+  const ID = /\[((?:n|src)_[0-9a-f]+)(・脳に見当たらない|・見当たらない)?\]/g; // memories, and originals (最近の出来事)
 
   function inline(text) {
     const out = [];
@@ -254,6 +254,7 @@
       if (m.index > at) out.push(rest.slice(at, m.index));
       if (m[1] !== undefined) out.push(el("b", {}, m[1]));
       else if (m[3]) out.push(el("span", { class: "mid missing", title: "この id の記憶は脳に見当たりません" }, m[2].slice(-6)));
+      else if (m[2].startsWith("src_")) out.push(el("button", { class: "mid", title: "この原文を開く", on: { click: () => openSource(m[2]) } }, m[2].slice(-6)));
       else out.push(el("button", { class: "mid", title: "この記憶を開く", on: { click: () => openMemory(m[2]) } }, m[2].slice(-6)));
       at = m.index + m[0].length;
     }
@@ -334,11 +335,37 @@
         + (r.rules_total > r.rules_shown ? `（全 ${r.rules_total} 件のうち、上限 ${n(r.profile_budget)} トークンに入る分）` : "") + "。"),
       lines.length ? el("ul", { class: "mb on" }, lines.map((x) => el("li", {}, inline(x.slice(2))))) :
         el("p", { class: "mb on hint" }, "まだ本決まりのルールはありません。ルールは事例から育ち、あなたが「そう」と言うと本決まりになります。"),
-      el("h3", { class: "mb on" }, "2. そのあと、話題ごとに思い出すもの"),
+      el("h3", { class: "mb on" }, "2. 会話の最初に、いっしょに渡すもの — 最近の出来事"),
+      r.recent ? el("p", { class: "mb on" }, `海馬にあるこの 1 週間の要約（上限 ${n(r.recent_budget)} トークン）。中身は「最近の出来事」のタブで見られます。`
+        + "大脳皮質にまだ入っていない、いまの状況を AI に伝えるためのものです。ルールとしては扱わせません。") :
+        el("p", { class: "mb on hint" }, "まだ作っていません。睡眠のあとに作ります（「最近の出来事」のタブからも作れます）。"),
+      el("h3", { class: "mb on" }, "3. そのあと、話題ごとに思い出すもの"),
       el("p", { class: "mb on" }, `AI が「/思い出して」で話題を渡すたびに、関係する記憶を大脳皮質 → 海馬 → 本棚の順に探し、`
         + `1 回あたり最大 ${n(r.recall_budget)} トークンにまとめて渡します。何が入るかは、その時の話題で変わります。`)];
     doc.replaceChildren(...parts);
-    $("#memory-tokens").textContent = `会話の最初: 約 ${n(r.profile_tokens)} トークン（上限 ${n(r.profile_budget)}） · 思い出すたび: 最大 ${n(r.recall_budget)} トークン`;
+    $("#memory-tokens").textContent = `会話の最初: ルール 約 ${n(r.profile_tokens)} ＋ 最近の出来事 約 ${n(r.recent_tokens)} トークン · 思い出すたび: 最大 ${n(r.recall_budget)} トークン`;
+  }
+
+  function describeRecent(w) {
+    if (w.running) return "書いています — 海馬の 1 週間を読んでいます…";
+    const at = w.generated_at ? new Date(w.generated_at) : null;
+    const how = { ai: "AI が要約", mechanical: "AI に頼めず、項目を並べただけ", none: "出来事なし" }[w.how] || "";
+    return [at ? `${at.getMonth() + 1}/${at.getDate()} ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")} に作成` : null,
+      w.sources != null ? `原文 ${w.sources} 件・案件 ${w.projects} 件` : null, how,
+      w.bad_quotes ? `原文と一致しない引用 ${w.bad_quotes} 件` : null,
+      w.error ? `AI のエラー: ${w.error}` : null].filter(Boolean).join(" · ");
+  }
+  function showRecent(w) {
+    const u = w.usage || {};
+    $("#memory-tokens").textContent = u.digest_tokens ? `AI に渡した原文 約 ${n(u.digest_tokens)} トークン（入力 ${n(u.input_tokens)}・出力 ${n(u.output_tokens)}）`
+      + (u.model ? ` · ${u.model}` : "") + (w.cost_usd != null ? ` · 料金換算 約 $${Number(w.cost_usd).toFixed(3)}` : "") : "";
+    $("#memory-meta").textContent = describeRecent(w);
+    $("#memory-write").disabled = !!w.running;
+    if (w.markdown && w.markdown !== shown) { shown = w.markdown; reveal(w.markdown); }
+    if (!w.markdown && !w.running) {
+      doc.replaceChildren(el("p", { class: "mb on hint" },
+        "まだありません。「いま書き直す」を押すと、海馬にあるこの 1 週間の原文から作ります（数分。Claude Code を使います）。睡眠のあとにも自動で作り直します。"));
+    }
   }
 
   let shown = null, polling = 0, view = "cortex", last_m = null;
@@ -346,16 +373,22 @@
     view = v;
     $("#mv-cortex").setAttribute("aria-selected", String(v === "cortex"));
     $("#mv-recall").setAttribute("aria-selected", String(v === "recall"));
-    $("#memory-write").hidden = v !== "cortex";
-    $("#memory-meta").hidden = v !== "cortex";
+    $("#mv-recent").setAttribute("aria-selected", String(v === "recent"));
+    $("#memory-write").hidden = v === "recall";
+    $("#memory-meta").hidden = v === "recall";
+    $("#memory-write").textContent = v === "recent" ? "いま書き直す" : "いま読み直す";
     shown = null;
     if (last_m) render(last_m);
   }
   $("#mv-cortex").addEventListener("click", () => setView("cortex"));
   $("#mv-recall").addEventListener("click", () => setView("recall"));
+  $("#mv-recent").addEventListener("click", () => setView("recent"));
 
   function render(m) {
     if (view === "recall") { showRecall(m.recall_view); return; }
+    if (view === "recent") { showRecent(m.recent || {}); return; }
+    $("#memory-meta").textContent = describe(m);
+    $("#memory-write").disabled = !!m.running;
     $("#memory-tokens").textContent = cortexTokens(m);
     if (m.markdown && m.markdown !== shown) { shown = m.markdown; reveal(m.markdown); }
     if (!m.markdown && !m.running) {
@@ -368,16 +401,14 @@
   async function load() {
     const m = await api("/api/memory");
     last_m = m;
-    generating = !!m.running;
-    $("#memory-meta").textContent = describe(m);
-    $("#memory-write").disabled = !!m.running;
+    generating = !!m.running || !!(m.recent && m.recent.running);
     render(m);
     clearTimeout(polling);
-    if (m.running) polling = setTimeout(() => guarded(() => load()), 3000);
+    if (generating) polling = setTimeout(() => guarded(() => load()), 3000);
   }
 
   $("#memory-write").addEventListener("click", () => guarded(async () => {
-    await api("/api/memory", {});
+    await api("/api/memory", view === "recent" ? { which: "recent" } : {});
     generating = true;
     await load();
   }));

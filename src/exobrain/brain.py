@@ -654,7 +654,13 @@ class Brain:
         # exo_session is the name the tools take (a relay dropped "session_id"); both are returned.
         if not include_profile:  # the owner compares answers with and without memory: read only on "/思い出して"
             return {"exo_session": sid, "session_id": sid}
-        return {"exo_session": sid, "session_id": sid, "profile": self.profile(PROFILE_BUDGET)}
+        from .recent import hand_over
+
+        out = {"exo_session": sid, "session_id": sid, "profile": self.profile(PROFILE_BUDGET)}
+        week = hand_over(self)
+        if week:  # the short-term memory: this week, not yet in the cortex (2026-10-11)
+            out["recent"] = week
+        return out
 
     def latest_session(self) -> str | None:
         row = self._conn.execute("SELECT id FROM sessions ORDER BY started_at DESC LIMIT 1").fetchone()

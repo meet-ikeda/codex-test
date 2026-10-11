@@ -4,6 +4,8 @@
 - summary: memory.md, the one-page reading of the cortex.
 - screen:  sorting the receiving box during the day.
 - ask:     `exobrain ask`.
+- recent:  最近の出来事 (recent.md), the week in the hippocampus. It carries what the cortex has not taken in yet,
+           so it gets the sleep's model.
 Claude Code is given the model with --model. Prices per million tokens (input / output, 2026-10):
 Opus 5.5 $4 / $20, Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 / $0.50.
 """
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
     from .brain import Brain
 
 DEFAULTS = {"sleep": "claude-sonnet-5-5", "summary": "claude-haiku-5-5", "screen": "claude-haiku-5-5",
-            "ask": "claude-sonnet-5-5"}
+            "ask": "claude-sonnet-5-5", "recent": "claude-sonnet-5-5"}
 
 
 def model_for(brain: Brain, job: str) -> str:

@@ -191,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("repromote", help="本棚の原文から、今の入れ方で大脳皮質を作り直す（先にバックアップを取る）")
     s.add_argument("--since", required=True, help="この日（YYYY-MM-DD）以降の原文を覚え直す")
     s.add_argument("--yes", action="store_true", help="確認せずに実行する")
+    s = sub.add_parser("recent", help="最近の出来事（海馬の 1 週間の要約。/思い出して で渡す）を書き直す")
+    s.add_argument("--no-ai", action="store_true", help="AI を使わず、項目を並べるだけにする")
     sub.add_parser("export", help="大脳皮質の写しを Google ドライブに書き出す（睡眠のたびにも自動で書き出す）")
     s = sub.add_parser("usage", help="睡眠で使ったトークン数を見る")
     s.add_argument("--days", type=int, default=7)
@@ -287,6 +289,13 @@ def main(argv: list[str] | None = None) -> int:
                       + (f" 海馬に見つからなかったもの: {', '.join(missing)}" if missing else ""))
             elif a.cmd in ("threads", "backfill"):
                 return _threads(brain, a)
+            elif a.cmd == "recent":
+                from . import recent
+
+                r = recent.write(brain, use_ai=not a.no_ai)
+                print(r["markdown"])
+                if r.get("error"):
+                    print(f"\nAI に頼めませんでした: {r['error']}")
             elif a.cmd == "repromote":
                 from . import repromote
 

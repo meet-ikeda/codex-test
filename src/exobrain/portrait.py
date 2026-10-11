@@ -201,5 +201,9 @@ def recall_view(brain: Brain) -> dict[str, Any]:
     rules = sum(1 for line in profile.splitlines() if line.startswith("- "))
     total = brain._conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'active' AND kind = 'procedural'"
                                 " AND (pinned = 1 OR (stage = 'confirmed' AND COALESCE(scope, '') = ''))").fetchone()[0]
+    from .recent import HAND_OVER_TOKENS, hand_over
+
+    week = hand_over(brain) or ""
     return {"profile": profile, "profile_tokens": estimate_tokens(profile), "profile_budget": PROFILE_BUDGET,
+            "recent": week, "recent_tokens": estimate_tokens(week), "recent_budget": HAND_OVER_TOKENS,
             "rules_shown": rules, "rules_total": total, "recall_budget": RECALL_BUDGET}

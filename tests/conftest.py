@@ -27,6 +27,15 @@ def no_real_claude_for_memory_md(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_claude_for_recent(monkeypatch):
+    """最近の出来事 is written by the real Claude Code after a sleep; tests get the mechanical page."""
+    import exobrain.recent as recent
+
+    real = recent.write
+    monkeypatch.setattr(recent, "write", lambda brain, now=None, use_ai=True: real(brain, now, use_ai=False))
+
+
+@pytest.fixture(autouse=True)
 def no_real_claude_for_screening(monkeypatch):
     """Screening asks the real Claude Code during the day; in tests the AI cannot be asked (nothing is dropped)."""
     import exobrain.screen as screen

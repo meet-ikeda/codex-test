@@ -52,6 +52,7 @@ class App:
         self.token = secrets.token_urlsafe(24)
         self.erase_plans: dict[str, dict] = {}
         self.sleep_state: dict[str, Any] = {"running": False}
+        self.recent_state: dict[str, Any] = {"running": False}
         self.memory_state: dict[str, Any] = {"running": False}
         self._stop = threading.Event()
 
@@ -221,7 +222,27 @@ class App:
     def memory(self) -> dict[str, Any]:
         from . import portrait
 
-        return {**portrait.read(self.brain), **self.memory_state, "recall_view": portrait.recall_view(self.brain)}
+        from . import recent
+
+        return {**portrait.read(self.brain), **self.memory_state, "recall_view": portrait.recall_view(self.brain),
+                "recent": {**recent.read(self.brain), **self.recent_state}}
+
+    def write_recent(self) -> dict[str, Any]:
+        from . import recent
+
+        if self.recent_state.get("running"):
+            raise InvalidInput("いま最近の出来事を書いています。")
+        self.recent_state = {"running": True}
+
+        def work():
+            try:
+                r = recent.write(self.brain)
+                self.recent_state = {"running": False, **({"error": r["error"]} if r.get("error") else {})}
+            except Exception as e:  # shown on screen
+                self.recent_state = {"running": False, "error": str(e)}
+
+        threading.Thread(target=work, daemon=True).start()
+        return self.recent_state
 
     def write_memory(self) -> dict[str, Any]:
         from . import portrait
@@ -439,7 +460,7 @@ class App:
         if path == "/api/rule/review":  # the owner's yes / no on a tentative rule (spec v0.8 §6.1)
             return self.brain.review_rule(str(body.get("id") or ""), str(body.get("verdict") or ""), "", "human")
         if path == "/api/memory":
-            return self.write_memory()
+            return self.write_recent() if body.get("which") == "recent" else self.write_memory()
         if path == "/api/sleep/timer":
             return self.set_timer(body)
         if path == "/api/backfill":
@@ -468,11 +489,18 @@ class App:
             from . import screen
 
             for step in (lambda: ingest(self.brain), self._scan_vault_if_due, lambda: encode_pending(self.brain),
-                         lambda: screen.run_if_due(self.brain)):  # around noon and 16:00 (spec v0.8 §3.4)
+                         lambda: screen.run_if_due(self.brain),  # around noon and 16:00 (spec v0.8 §3.4)
+                         self._sleep_if_bedtime_missed):
                 try:
                     step()
                 except Exception as e:  # keep the app alive; report in the terminal
                     print(f"inbox: {e}")
+
+    def _sleep_if_bedtime_missed(self) -> None:
+        """Up late, or the Mac was off at bedtime: go to sleep now (2026-10-11)."""
+        if not self.sleep_state.get("running") and sleep.should_wake_to_sleep(self.brain) \
+                and sleep.find_claude(self.brain) is not None:
+            self.start_sleep(True)
 
     def _scan_vault_if_due(self) -> None:
         """#remember is looked for twice a day at most (the Obsidian plugin sends notes at once)."""

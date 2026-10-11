@@ -104,8 +104,11 @@ def last_sleep(brain: Brain) -> datetime | None:
 
 # A sleep whose summary starts like this did not get its AI work done: it does not count as "slept" for the
 # nightly schedule, so a manual sleep without AI (or a failed one) never makes the night's AI sleep skip.
-NOT_A_FULL_SLEEP = ("AI による整理は行わない", "AI による整理が", "Claude Code が見つからない",
+# A sleep that ran out of time did its work for 30 minutes and kept it: that counts.
+NOT_A_FULL_SLEEP = ("AI による整理は行わない", "AI による整理が異常終了", "Claude Code が見つからない",
                     "Claude Code のログインが切れて")
+NAP_HOURS = 4  # a sleep this long before bedtime counts for the night (no second sleep at bedtime)
+RETRY_AFTER_HOURS = 6  # the resident app tries a failed night again after this long, not sooner
 
 
 def last_full_sleep(brain: Brain) -> datetime | None:
@@ -116,10 +119,43 @@ def last_full_sleep(brain: Brain) -> datetime | None:
     return None
 
 
+def bedtime(brain: Brain) -> dict | None:
+    cfg = brain.settings.home / "config.json"
+    return json.loads(cfg.read_text(encoding="utf-8")).get("sleep_timer") if cfg.exists() else None
+
+
+def last_bedtime(brain: Brain, now: datetime | None = None) -> datetime | None:
+    """The latest bedtime (the owner's sleep timer, local time) at or before now; None without a timer."""
+    timer = bedtime(brain)
+    if not timer:
+        return None
+    now = (now or datetime.now(timezone.utc)).astimezone()
+    at = now.replace(hour=int(timer["hour"]), minute=int(timer.get("minute", 0)), second=0, microsecond=0)
+    return at if at <= now else at - timedelta(days=1)
+
+
 def is_due(brain: Brain, now: datetime | None = None, hours: float = DUE_AFTER_HOURS) -> bool:
+    """Bedtime has passed and the brain has not slept since (2026-10-11: a Mac that was off or closed at bedtime,
+    or a night up late, sleeps as soon as it is back). A sleep in the few hours before bedtime counts for the night.
+    Without a timer: once the last sleep is `hours` old."""
     last = last_full_sleep(brain)
     now = now or datetime.now(timezone.utc)
+    bed = last_bedtime(brain, now)
+    if bed is not None:
+        return last is None or last < bed - timedelta(hours=NAP_HOURS)
     return last is None or now - last >= timedelta(hours=hours)
+
+
+def should_wake_to_sleep(brain: Brain, now: datetime | None = None) -> bool:
+    """For the resident app: bedtime was missed (the launchd timer gets the first go at bedtime itself, and a
+    failed try is not repeated for some hours, so a night that keeps failing does not use up the plan)."""
+    now = now or datetime.now(timezone.utc)
+    bed = last_bedtime(brain, now)
+    if bed is None or not is_due(brain, now) or now - bed < timedelta(minutes=15):
+        return False
+    row = brain._conn.execute("SELECT MAX(started_at) FROM sleep_runs").fetchone()
+    tried = datetime.fromisoformat(row[0]) if row and row[0] else None
+    return tried is None or now - tried >= timedelta(hours=RETRY_AFTER_HOURS)
 
 
 @contextmanager
@@ -1025,6 +1061,13 @@ def run(brain: Brain, use_ai: bool = True, runner: Runner = claude_runner) -> di
 
         if rules_export.enabled(brain):  # off unless the owner turned it on (spec v0.8 §6.5)
             out["rules_written_to"] = rules_export.write(brain)
+        from . import recent
+
+        try:  # 最近の出来事: the week in the hippocampus, for "/思い出して" (mechanical when there is no AI)
+            r = recent.write(brain, use_ai=use_ai)
+            out["recent_md"] = r["how"] + (f" ({r['error']})" if r.get("error") else "")
+        except Exception as e:  # noqa: BLE001 — the sleep itself went well; the page waits for next time
+            out["recent_md"] = str(e)
         if use_ai:  # memory.md: what the brain thinks after tonight (a short, tool-less call)
             from . import portrait
 
