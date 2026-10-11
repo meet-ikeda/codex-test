@@ -98,3 +98,17 @@ def test_ids_and_quotes_are_checked():
                                         {"src_aa"}, "- > 言ったこと\n- 決めた")
     assert unknown == ["src_bb"] and "[src_bb・見当たらない]" in body
     assert bad == 1 and "言ってないこと [src_aa]（※原文と一字一句は一致しません）" in body
+
+
+def test_a_tendency_needs_two_days():
+    body, _, bad = recent._check("## 何度も出た理由（この 1 週間の傾向。ルールではない）\n- 費用を抑える [src_a] [src_b]\n"
+                                 "- 自然さ優先 [src_a] [src_c]", {"src_a": "2026-10-09", "src_b": "2026-10-09",
+                                                                 "src_c": "2026-10-10"}, "")
+    assert bad == 1 and "費用を抑える [src_a] [src_b]（※別の日の根拠が 2 つありません" in body
+    assert body.endswith("[src_c]")
+
+
+def test_names_that_came_up_on_several_days_are_counted():
+    items = [{"day": "2026-10-09", "lines": [("決まったこと", "[[池田コピー課]]の声")]},
+             {"day": "2026-10-10", "lines": [("あったこと", "[[池田コピー課|コピー課]]と[[Anam]]")]}]
+    assert recent.recurring(items) == [("池田コピー課", 2)]

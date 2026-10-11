@@ -50,36 +50,49 @@ WEEKDAYS = "月火水木金土日"
 
 PROMPT = """\
 あなたは exobrain（オーナー＝池田さんの外部脳）の「最近の出来事」を書く役です。
-下の「海馬の原文（この 1 週間）」だけを根拠に、別の AI が会話の最初に読んで「いま何がどこまで進んでいるか」を
-取り違えずにつかめる 1 ページを書いてください。読むのは AI です。オーナーにもう一度聞かずに続きから話せることが目的です。
+下の「海馬の原文（この 1 週間）」だけを根拠に、別の AI が会話の最初に読む 1 ページを書いてください。
+目的は 2 つ。(1) いま何がどこまで進んでいるかを取り違えないこと。(2) オーナーが何を理由に判断したかを知り、
+次の判断を同じ理由で考え直せること。大脳皮質（長期の記憶）がなくても、このページだけで役に立つように書く。
 
 決まり:
 - 原文にないことは書かない。推測で補わない。性格や感情を読まない
+- 重みの順: 注意・訂正されたこと ＞ オーナーの言葉・こだわり ＞ 決まったこと・ボツ ＞ 今の状況・あったこと ＞ AIの解釈。
+  重いものほど落とさない。AI の解釈は「（AIの読み）」と頭に付けて分ける
 - 同じ案件が別の名前で出ていたら（「ニュージェック」と「NJ案件」など）1 つにまとめる
 - 案件ごとに、最後に話した日が新しい順に書く。1 つの案件の中では、日付の新しい内容を正とする。
   前の日の決定が後の日に変わったら、新しいほうだけを書き「（10/7 は〜 → 10/9 に変更）」と添える
 - 古い日の話ほど短く。昨日・今日の話は具体的に（数字・名前・条件を落とさない）
-- 「ボツになったこと」は理由と一緒に残す（別の AI が同じ案をまた出さないため）
+- 判断は「判断 ← 理由」の形で書く。理由はオーナーが言ったものだけ。言っていなければ「（理由は言っていない）」。
+  オーナーの反応（喜んだ・差し戻した）が原文にあれば添える
+- 「ボツ」は理由と一緒に残す（別の AI が同じ案をまた出さないため）
 - 「次にやること」「まだ決まっていないこと」は、後の日に片づいていれば書かない
-- オーナーの言葉は言い換えずに、行頭を「> 」にして原文どおりに引く（1 案件 2 つまで）。AI の解釈は「（AIの読み）」と頭に付けて分ける
+- オーナーの言葉は言い換えずに、行頭を「> 」にして原文どおりに引く（1 案件 3 つまで。理由やこだわりを言ったものを優先）
 - 1 回しか出ていない判断を、いつもの決まりのように書かない（「この案件では」と場面を付ける）
+- 「何度も出た理由」には、別の日の 2 つ以上の原文に出た理由だけを書き、その原文の id を 2 つ以上付ける。
+  ルールではなく「この 1 週間の傾向」として書く。該当がなければ見出しごと省く
 - 各行の終わりに、根拠の原文の id を [src_...] の形で 1〜3 個付ける（下にある id だけ）
-- 全体で 2,000〜4,000 字。見出しは次のとおり。該当がなければその見出しごと省く
+- 全体で 2,500〜4,500 字。見出しは次のとおり。該当がなければその見出しごと省く
 
 # 最近の出来事（{start}〜{end}）
 ## この 1 週間
 （3 行以内。何に時間を使ったか）
+## 注意・訂正されたこと
+（オーナーに直された・注意されたこと。これから守ること。いちばん大事）
 ## 案件ごと
 ### 案件名（最後に話した日）
 - いまどこまで:
-- 決まったこと:
-- ボツ:
+- 判断 ← 理由:
+- ボツ ← 理由:
 - 次にやること:
 - オーナーの言葉:
+## 何度も出た理由（この 1 週間の傾向。ルールではない）
 ## 何日も続いている話題
 ## まだ決まっていないこと
 
 出力は本文だけ（前置きや説明は書かない）。
+
+--- 何日も出てきた名前（プログラムが数えたもの: 名前・出た日数） ---
+{recurring}
 
 --- 海馬の原文（この 1 週間。{now} 時点） ---
 {digest}
@@ -153,6 +166,19 @@ def by_project(items: list[dict]) -> list[tuple[str, list[dict]]]:
     return sorted(groups.items(), key=lambda kv: kv[1][-1]["day"], reverse=True)
 
 
+WIKILINK = re.compile(r"\[\[([^\]|\n]+)(?:\|[^\]\n]*)?\]\]")
+
+
+def recurring(items: list[dict], min_days: int = 2) -> list[tuple[str, int]]:
+    """Names marked [[...]] that came up on two days or more this week: repetition is a sign of weight."""
+    days: dict[str, set[str]] = {}
+    for it in items:
+        for _, text in it["lines"]:
+            for name in WIKILINK.findall(text):
+                days.setdefault(name.strip(), set()).add(it["day"])
+    return sorted(((n, len(d)) for n, d in days.items() if len(d) >= min_days), key=lambda x: (-x[1], x[0]))[:30]
+
+
 def digest(items: list[dict]) -> str:
     """The week as plain text for the writer: by project, oldest day first inside each (so later days read as later).
     When the week is too long, the oldest originals are cut first."""
@@ -180,6 +206,13 @@ def mechanical(items: list[dict]) -> str:
     """The same sections laid out by the program, when the AI cannot be asked: latest state, decisions,
     turned down, open threads and the owner's words, per project, newest first."""
     out = []
+    fixes = [(t, it) for it in sorted(items, key=lambda x: x["day"], reverse=True)
+             for h, t in it["lines"] if h == "注意・訂正されたこと"]
+    if fixes:
+        out.append("## 注意・訂正されたこと")
+        out += [f"- {t}（{_md_day(it['day'])}） [{it['source_id']}]" for t, it in fixes[:10]]
+        out.append("")
+    out.append("## 案件ごと")
     for project, group in by_project(items):
         last = group[-1]
         out.append(f"### {project}（最後に話した日: {_md_day(last['day'])}）")
@@ -194,7 +227,8 @@ def mechanical(items: list[dict]) -> str:
                     if h in heads and t not in seen and len(seen) < 5:
                         seen.add(t)
                         out.append(f"- {label}: {t}（{_md_day(it['day'])}） [{it['source_id']}]")
-        quotes = [(t, it) for it in reversed(group) for h, t in it["lines"] if h == "オーナーの言葉"][:2]
+        quotes = [(t, it) for it in reversed(group) for h, t in it["lines"]
+                  if h in ("オーナーのこだわり・理由", "オーナーの言葉")][:3]
         for t, it in quotes:
             out.append(f"> {t.lstrip('> ').strip()} [{it['source_id']}]")
         out.append("")
@@ -220,7 +254,8 @@ def write(brain: Brain, now: datetime | None = None, use_ai: bool = True) -> dic
         from .models import model_for
 
         prompt = PROMPT.format(start=f"{start.month}/{start.day}", end=f"{now.month}/{now.day}",
-                               now=f"{now:%Y-%m-%d %H:%M}", digest=text)
+                               now=f"{now:%Y-%m-%d %H:%M}", digest=text,
+                               recurring="、".join(f"{n}（{k} 日）" for n, k in recurring(items)) or "（なし）")
         try:
             proc = subprocess.run([exe, "-p", "--model", model_for(brain, "recent"), "--output-format", "json",
                                    "--disallowedTools", NO_TOOLS], input=prompt, capture_output=True, text=True,
@@ -244,15 +279,23 @@ def write(brain: Brain, now: datetime | None = None, use_ai: bool = True) -> dic
     return save(brain, body, items, now, how="mechanical", source_text=text, error=error)
 
 
-def _check(body: str, ids: set[str], source_text: str) -> tuple[str, list[str], int]:
-    """Flag ids that are not this week's originals, and owner quotes not found word for word in them."""
+def _check(body: str, ids: set[str] | dict[str, str], source_text: str) -> tuple[str, list[str], int]:
+    """Flag ids that are not this week's originals, owner quotes not found word for word in them, and "reasons
+    that came up again and again" resting on fewer than two days. `ids` may map each id to its day."""
     unknown = sorted({i for i in ID.findall(body) if i not in ids})
     for i in unknown:
         body = body.replace(f"[{i}]", f"[{i}・見当たらない]")
     flat = re.sub(r"\s+", "", source_text)
     bad = 0
     lines = []
+    section = ""
     for line in body.splitlines():
+        if line.startswith("## "):
+            section = line
+        if section.startswith("## 何度も出た理由") and line.lstrip().startswith("- ") \
+                and len({ids[i] if isinstance(ids, dict) else i for i in ID.findall(line) if i in ids}) < 2:
+            line += "（※別の日の根拠が 2 つありません。傾向とは言えません）"
+            bad += 1
         if line.startswith(">"):
             quote = re.sub(r"\s*\[src_[^\]]+\]", "", line.lstrip("> ").strip()).strip()
             quote = re.sub(r"（[^（）]*）$", "", quote).strip().strip("「」")
@@ -265,7 +308,7 @@ def _check(body: str, ids: set[str], source_text: str) -> tuple[str, list[str], 
 
 def save(brain: Brain, body: str, items: list[dict], now: datetime, how: str, source_text: str = "",
          cost: float | None = None, usage: dict | None = None, error: str | None = None) -> dict[str, Any]:
-    ids = {it["source_id"] for it in items}
+    ids = {it["source_id"]: it["day"] for it in items}
     body, unknown, bad_quotes = _check(body, ids, source_text) if source_text else (body, [], 0)
     days = sorted({it["day"] for it in items})
     how_ja = {"ai": "AI が要約したもの", "mechanical": "AI に頼めなかったため、プログラムが項目を並べたもの",
@@ -311,6 +354,7 @@ def hand_over(brain: Brain, budget: int = HAND_OVER_TOKENS) -> str | None:
             break
         lines.append(line)
         used += cost
+    lines.append("（[src_...] の原文は open_source で読めます。判断の前に細部を確かめたいときに使う）")
     text = "\n".join(lines)
     at = r.get("generated_at")
     if at and datetime.now().astimezone() - datetime.fromisoformat(at) > timedelta(days=STALE_DAYS):
