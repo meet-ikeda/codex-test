@@ -224,10 +224,18 @@ def search(brain: Brain, cue: str, scope: str = "all", limit: int = 5) -> list[H
 
 
 def fade_expired(brain: Brain, actor: str) -> int:
-    """Information not taken into the cortex leaves the hippocampus after its time (it stays on the bookshelf)."""
+    """Information not taken into the cortex leaves the hippocampus after its time (it stays on the bookshelf).
+    Only what a sleep has looked at and not chosen fades: an original still waiting its turn stays (2026-10-11 —
+    the owner: no need to forget for nothing)."""
+    from .promote import candidates
+
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     ids = [r[0] for r in brain._conn.execute(
         "SELECT source_id FROM hippocampus WHERE status = 'waiting' AND expires_at < ?", (now,))]
+    if ids:
+        done = {r[0] for r in brain._conn.execute("SELECT key FROM sleep_marks WHERE kind = 'promoted'")}
+        unseen = {seg.source_id for seg, _ in candidates(brain, done)}
+        ids = [i for i in ids if i not in unseen]
     if ids:
         brain._emit(actor, "hippocampus_faded", {"source_ids": ids})
     return len(ids)

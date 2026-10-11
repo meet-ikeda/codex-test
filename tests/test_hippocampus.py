@@ -51,6 +51,12 @@ def test_faded_information_is_still_on_the_bookshelf(brain, session):
     with brain._tx():
         brain._conn.execute("UPDATE hippocampus SET expires_at = ?",
                             ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),))
+        assert fade_expired(brain, "sleep") == 0  # no sleep has looked at it yet: it waits its turn
+        from exobrain.promote import candidates
+
+        for seg, _ in list(candidates(brain, set())):  # a sleep looked at it and chose nothing
+            brain._conn.execute("INSERT INTO sleep_marks (kind, key, value, at) VALUES ('promoted', ?, 0, '')",
+                                (seg.key,))
         assert fade_expired(brain, "sleep") == 1
     r = brain.recall(session, "採用サイトでは社員が主役")
     assert r["searched"] == ["大脳皮質", "海馬", "本棚"] and r["evidence"][0]["place"] == "本棚"

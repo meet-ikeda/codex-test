@@ -36,7 +36,7 @@ FILE = "recent.md"
 META = "recent.json"
 WINDOW_DAYS = 7
 INPUT_MAX_CHARS = 150_000  # about a busy week of daily logs; beyond this the oldest days are cut first
-HAND_OVER_TOKENS = 4_000  # what "/思い出して" hands over at most, on top of the rules
+HAND_OVER_TOKENS = 5_000  # what "/思い出して" hands over at most, on top of the rules (the page is ~4,000 characters)
 STALE_DAYS = 3
 TIMEOUT_SECONDS = 900
 SKIPPED = ("drop", "chatter")  # screening: not tied to attention / small talk
@@ -68,10 +68,13 @@ PROMPT = """\
 - 「次にやること」「まだ決まっていないこと」は、後の日に片づいていれば書かない
 - オーナーの言葉は言い換えずに、行頭を「> 」にして原文どおりに引く（1 案件 3 つまで。理由やこだわりを言ったものを優先）
 - 1 回しか出ていない判断を、いつもの決まりのように書かない（「この案件では」と場面を付ける）
+- AI が提案・説明しただけで、オーナーが決めていないことは「判断」に書かない（書くなら「（AIの提案・未決）」）
 - 「何度も出た理由」には、別の日の 2 つ以上の原文に出た理由だけを書き、その原文の id を 2 つ以上付ける。
   ルールではなく「この 1 週間の傾向」として書く。該当がなければ見出しごと省く
 - 各行の終わりに、根拠の原文の id を [src_...] の形で 1〜3 個付ける（下にある id だけ）
-- 全体で 2,500〜4,500 字。見出しは次のとおり。該当がなければその見出しごと省く
+- 全体で 4,000 字以内（厳守。超えた分は会話に渡らず捨てられる）。詳しく書く案件は、最近・重いものから 6 件まで。
+  残りの案件は「そのほかの案件」に 1 行ずつ（案件名・最後に話した日・いまどこまで）
+- 見出しは次のとおり。該当がなければその見出しごと省く
 
 # 最近の出来事（{start}〜{end}）
 ## この 1 週間
@@ -85,6 +88,7 @@ PROMPT = """\
 - ボツ ← 理由:
 - 次にやること:
 - オーナーの言葉:
+## そのほかの案件
 ## 何度も出た理由（この 1 週間の傾向。ルールではない）
 ## 何日も続いている話題
 ## まだ決まっていないこと

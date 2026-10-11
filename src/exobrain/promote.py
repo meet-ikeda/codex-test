@@ -99,8 +99,10 @@ def candidates(brain: Brain, done: set[str]) -> Iterator[tuple[Segment, str]]:
     c = brain._conn
     rows = c.execute(
         "SELECT s.id, s.kind, s.path FROM sources s JOIN hippocampus h ON h.source_id = s.id"
-        # What fades soonest goes first: a rebuild's originals wait 90 days, a new log only 7.
-        " WHERE h.status = 'waiting' AND s.erased = 0 ORDER BY h.expires_at, s.created_at").fetchall()
+        # In the order things happened (2026-10-11): a later decision is learned after the earlier one, so it is the
+        # one that replaces. (Newest first had a rebuild learn 10/10 before 9/27, and never reach 9/27.)
+        " WHERE h.status = 'waiting' AND s.erased = 0 ORDER BY " + _DAY.replace("meta_json", "s.meta_json")
+        .replace("created_at", "s.created_at") + ", s.created_at").fetchall()
     for r in rows:
         path = brain.settings.drive_root / r["path"]
         if not path.exists():
