@@ -123,3 +123,13 @@ def test_the_newest_days_are_kept_word_for_word_and_always_handed_over(brain, se
     assert recent.TAIL_HEADING in r["markdown"] and "単価は 1 本 38,500 円（税別）にする" in r["markdown"]
     got = recent.hand_over(brain, budget=recent.TAIL_TOKENS + 20)  # the summary is cut first, the tail stays
     assert "38,500 円" in got.split(recent.TAIL_HEADING)[1]
+
+
+def test_one_project_goes_by_one_name(brain):
+    names = ["ニュージェック", "ニュージェック社員インタビュー(NJ案件)", "exobrain Mac セットアップ", "exobrain",
+             "リアルタイム音声会話アプリを開発", "リアルタイム音声会話アプリの開発（自分のアプリ）", "無鄰菴の庭"]
+    got = recent.canonical_projects(brain, names)
+    assert got["ニュージェック社員インタビュー(NJ案件)"] == "ニュージェック"
+    assert got["exobrain Mac セットアップ"] == "exobrain"
+    assert got["リアルタイム音声会話アプリを開発"] == got["リアルタイム音声会話アプリの開発（自分のアプリ）"]
+    assert got["無鄰菴の庭"] == "無鄰菴の庭"

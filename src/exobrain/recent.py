@@ -58,7 +58,11 @@ PROMPT = """\
 - 原文にないことは書かない。推測で補わない。性格や感情を読まない
 - 重みの順: 注意・訂正されたこと ＞ オーナーの言葉・こだわり ＞ 決まったこと・ボツ ＞ 今の状況・あったこと ＞ AIの解釈。
   重いものほど落とさない。AI の解釈は「（AIの読み）」と頭に付けて分ける
-- 同じ案件が別の名前で出ていたら（「ニュージェック」と「NJ案件」など）1 つにまとめる
+- 案件名はプログラムがそろえてある（### の後の名前）。その名前で 1 案件 1 節にする。まだ同じものが別の名前で
+  残っていたら（「ニュージェック」と「NJ案件」など）1 つにまとめる
+- 情報を混ぜない: 1 つの行に 2 つの案件の話を書かない。ある案件の決定や理由を、別の案件の節に書かない。
+  同じ案件の中に別の仕事（「仕事: …」）があれば、行頭に「〔仕事名〕」を付けて分ける
+- 誰の話かを取り違えない: クライアント・取材相手の言葉と、オーナーの言葉を混ぜない
 - 案件ごとに、最後に話した日が新しい順に書く。1 つの案件の中では、日付の新しい内容を正とする。
   前の日の決定が後の日に変わったら、新しいほうだけを書き「（10/7 は〜 → 10/9 に変更）」と添える
 - 古い日の話ほど短く。昨日・今日の話は具体的に（数字・名前・条件を落とさない）
@@ -150,10 +154,53 @@ def gather(brain: Brain, now: datetime | None = None) -> list[dict[str, Any]]:
         else:  # handed over on purpose (deposits, notes): all of it, but not without end
             lines = [("本文", body.strip()[:3000])]
         if lines:
+            name = _project_of(raw, r["title"])
             items.append({"source_id": r["id"], "day": day, "kind": r["kind"], "title": r["title"],
-                          "project": _project_of(raw, r["title"]),
+                          "project": name, "job": name,
                           "writer": r["ai_name"] if r["author"] == "ai" else "オーナー", "lines": lines})
+    names = canonical_projects(brain, [it["project"] for it in items])
+    for it in items:
+        it["project"] = names[it["project"]]
     return items
+
+
+BRACKETS = re.compile(r"[（(【\[][^）)】\]]*[）)】\]]?")
+TRAILING = re.compile(r"[のをがとにでは・\s]+$")
+
+
+def _bare(name: str) -> str:
+    return TRAILING.sub("", BRACKETS.sub("", name)).strip()
+
+
+def canonical_projects(brain: Brain, names: list[str]) -> dict[str, str]:
+    """One name per project before the AI sees the week (2026-10-13): logs name the same work differently
+    ("exobrain Mac セットアップ", "exobrainの記憶の仕組み開発"), and left to the summary they split or blur.
+    A name known to the cortex as another's alias takes the concept's name; a name that begins with another
+    name in the week joins it ("ニュージェック社員インタビュー" → "ニュージェック"); two names sharing a long
+    beginning join under it ("リアルタイム音声会話アプリを開発" / "…の開発"). The original name stays as the job."""
+    from .recall import normalize
+
+    bare = {n: _bare(n) or n for n in set(names)}
+    alias = {r[0]: r[1] for r in brain._conn.execute(
+        "SELECT a.norm, n.label FROM concept_aliases a JOIN nodes n ON n.id = a.concept_id")}
+    for n, b in bare.items():
+        bare[n] = alias.get(normalize(b), b)
+    bases = sorted(set(bare.values()), key=len)
+    out = {}
+    for n, b in bare.items():
+        base = next((x for x in bases if x != b and len(x) >= 2 and b.startswith(x)), None)
+        if base is None:  # a long shared beginning with another name
+            for x in bases:
+                if x == b:
+                    continue
+                k = 0
+                while k < min(len(x), len(b)) and x[k] == b[k]:
+                    k += 1
+                if k >= 6:
+                    base = _bare(b[:k]) or b[:k]
+                    break
+        out[n] = base or b
+    return out
 
 
 def _md_day(day: str) -> str:
@@ -193,7 +240,8 @@ def digest(items: list[dict]) -> str:
             for heading, text in it["lines"]:
                 sections.setdefault(heading, []).append(text)
             order = [h for h in SECTION_ORDER if h in sections] + [h for h in sections if h not in SECTION_ORDER]
-            text = f"### {project} · {_md_day(it['day'])} · {it['writer']} · {it['title']} [{it['source_id']}]\n" + \
+            job = f" · 仕事: {it['job']}" if it.get("job") and it["job"] != project else ""
+            text = f"### {project}{job} · {_md_day(it['day'])} · {it['writer']} · {it['title']} [{it['source_id']}]\n" + \
                 "\n".join(f"{h}:\n" + "\n".join(f"- {x}" for x in sections[h]) for h in order)
             blocks.append((it["day"], text))
     keep = sorted(range(len(blocks)), key=lambda i: blocks[i][0], reverse=True)
