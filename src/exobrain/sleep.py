@@ -1045,7 +1045,9 @@ def run(brain: Brain, use_ai: bool = True, runner: Runner = claude_runner) -> di
     from .cortex_export import export
     from .promote import encode_nodes
 
-    with sleep_lock(brain):
+    from .macos import kept_awake
+
+    with sleep_lock(brain), kept_awake():
         run_id, stats = start(brain)
         if not use_ai:  # no AI tonight: the rest of the receiving box is let in whole (nothing is lost)
             from . import screen

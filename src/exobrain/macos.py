@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import plistlib
+from contextlib import contextmanager
 from pathlib import Path
 
 SLEEP_LABEL = "jp.exobrain.sleep"
@@ -25,6 +26,23 @@ def sleep_agent(exobrain: str, hour: int | None = None, minute: int = 0, log_dir
         plist["StandardOutPath"] = str(log_dir / "sleep.out.log")
         plist["StandardErrorPath"] = str(log_dir / "sleep.err.log")
     return plistlib.dumps(plist)
+
+
+@contextmanager
+def kept_awake():
+    """Keep the Mac from going to sleep while exobrain sleeps (2026-10-13: three nights failed with "Your computer
+    went to sleep mid-response"). macOS's own caffeinate: -i idle sleep, -s system sleep on AC power. A closed lid
+    still sleeps. Does nothing off macOS."""
+    import shutil
+    import subprocess
+
+    exe = shutil.which("caffeinate")
+    proc = subprocess.Popen([exe, "-is"]) if exe else None
+    try:
+        yield
+    finally:
+        if proc:
+            proc.terminate()
 
 
 def launch_agents_dir() -> Path:

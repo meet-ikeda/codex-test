@@ -13,6 +13,9 @@ def no_real_launch_agents(monkeypatch, tmp_path):
 
     monkeypatch.setattr(macos, "launch_agents_dir", lambda: tmp_path / "LaunchAgents")
     monkeypatch.setattr(macos, "apply_sleep_timer", lambda settings, timer: False)
+    import contextlib
+
+    monkeypatch.setattr(macos, "kept_awake", contextlib.nullcontext)
 
 
 @pytest.fixture(autouse=True)
