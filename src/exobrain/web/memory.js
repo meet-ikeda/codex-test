@@ -147,7 +147,7 @@
         i = (Math.random() * V.length) | 0;
         if (P[i * 4 + 2] > 0.55) break;
       }
-      const sx = P[i * 4], sy = P[i * 4 + 1];
+      const [sx, sy] = PIC && PIC_RECT && PIC_PTS.length ? picturePoint() : [P[i * 4], P[i * 4 + 1]];
       const tg = target(block);
       if (!tg) return;
       const mx = (sx + tg.x) / 2 + (Math.random() - 0.5) * 60, my = Math.min(sy, tg.y) - 40 - Math.random() * 120;
@@ -275,6 +275,27 @@
   const rand = () => { rnd = (rnd * 16807) % 2147483647; return rnd / 2147483647; };
 
   let brainImg = null, brainKey = "";
+  // The owner's picture of a polygon brain (2026-10-13), cut out of its own frame (brain.png). Until it arrives,
+  // the ink drawing below stands in.
+  let PIC = null, PIC_PTS = [], PIC_RECT = null, picLoading = false, pings = [];
+  function loadPicture() {
+    if (picLoading) return;
+    picLoading = true;
+    const im = new Image();
+    im.onload = () => {
+      const c = document.createElement("canvas"), sw = 140, sh = Math.round(140 * im.height / im.width);
+      c.width = sw; c.height = sh;
+      const g = c.getContext("2d"); g.drawImage(im, 0, 0, sw, sh);
+      const d = g.getImageData(0, 0, sw, sh).data;
+      for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) if (d[(y * sw + x) * 4 + 3] > 220) PIC_PTS.push([x / sw, y / sh]);
+      PIC = im; brainKey = "";
+    };
+    im.src = "brain.png";
+  }
+  function picturePoint() {  // somewhere on the pictured brain, on screen
+    const [u, v] = PIC_PTS[(Math.random() * PIC_PTS.length) | 0], r = PIC_RECT;
+    return [r.x + u * r.w, r.y + v * r.h];
+  }
   const GS = 3;  // stencil pixels per field cell
   const GYRI_SCALE = 0.3, SULCUS_AT = 0.6;  // image pixels per stencil pixel; brightness where a sulcus begins
   let GYRI = null, gyriLoading = false;
@@ -300,6 +321,15 @@
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
     g.strokeStyle = INK; g.fillStyle = INK; g.lineCap = "round"; g.lineJoin = "round";
     brainImg = img;
+    loadPicture();
+    if (PIC) {  // the picture, inside the dial: about 2.2 brain-radii wide
+      const pw = L.s * 2.2, ph = pw * PIC.height / PIC.width;
+      PIC_RECT = { x: L.cx - pw / 2, y: L.cy - ph / 2, w: pw, h: ph };
+      g.globalAlpha = L.alpha; g.imageSmoothingQuality = "high";
+      g.drawImage(PIC, PIC_RECT.x, PIC_RECT.y, pw, ph);
+      g.globalAlpha = 1;
+      return;
+    }
     if (!TISSUE) return;
     loadGyri();
     const S = L.s / 415, sx = (px) => L.cx + (px - 520) * S, sy = (py) => L.cy + (py - 350) * S;
@@ -455,9 +485,18 @@
     ctx.globalAlpha = 0.55; ctx.drawImage(brainImg, 0, 0); ctx.restore();
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.fillStyle = INK; ctx.strokeStyle = INK;
+    if (PIC && PIC_RECT && PIC_PTS.length && !reduce) {  // a few points light up in turn, like readings
+      if (!pings.length) for (let k = 0; k < 7; k++) pings.push(PIC_PTS[(k * 977 + 131) % PIC_PTS.length]);
+      ctx.lineWidth = 0.7;
+      pings.forEach(([u, v], k) => {
+        const x = PIC_RECT.x + u * PIC_RECT.w, y = PIC_RECT.y + v * PIC_RECT.h, ph = (t * 0.5 + k / pings.length) % 1;
+        ctx.globalAlpha = L.alpha * (1 - ph); ctx.beginPath(); ctx.arc(x, y, 2 + ph * 14, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = L.alpha * 0.9; ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill();
+      });
+    }
     if (L.hud) drawHUD(L, t, yaw, scanY);
-    // pulses running along the edges, like signals
-    if (!reduce) {
+    // pulses running along the edges, like signals (the drawn mesh only; the picture has its own points)
+    if (!reduce && !PIC) {
       while (pulses.length < (generating ? PULSES * 2 : PULSES)) {
         const a = (Math.random() * V.length) | 0, nb = V.nb[a];
         if (nb.length) pulses.push({ a, b: nb[(Math.random() * nb.length) | 0], t: 0, v: 1.6 + Math.random() * 1.6, hops: 4 + ((Math.random() * 6) | 0) });
