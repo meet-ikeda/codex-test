@@ -5,6 +5,7 @@
 
 (function () {
   window.exobrainBrainPoints = (n) => brainPoints(n); // shared with memory.js (Room 06)
+  window.exobrainBrainStencil = (sulci) => brainStencil(sulci); // the same profile, for Room 06's mesh
   const overlay = document.getElementById("intro");
   const canvas = document.getElementById("intro-canvas");
   if (!overlay || !canvas) return;
@@ -23,7 +24,7 @@
 
   // A brain in profile (front to the right), drawn as a stencil: ink for tissue, white strokes for
   // the sulci. Particles sample the ink; depth follows the outline so the brain can turn a little.
-  function brainPoints(n) {
+  function brainStencil(sulci = true) { // 1000 x 720: ink for tissue; with sulci, white strokes for the folds
     const off = document.createElement("canvas");
     const w = 1000, h = 720;
     off.width = w; off.height = h;
@@ -43,6 +44,7 @@
     // cerebellum and brainstem
     g.beginPath(); g.ellipse(262, 520, 118, 68, -0.12, 0, Math.PI * 2); g.fill();
     g.beginPath(); g.moveTo(372, 470); g.lineTo(425, 470); g.lineTo(438, 660); g.lineTo(398, 662); g.closePath(); g.fill();
+    if (!sulci) return g;
     // sulci: the lateral fissure, the central sulcus, and the smaller folds
     g.strokeStyle = "#fff"; g.lineCap = "round"; g.lineJoin = "round";
     const S = [
@@ -73,7 +75,12 @@
     }
     g.lineWidth = 6; // the cerebellum's fine stripes
     for (let k = -3; k <= 3; k++) { g.beginPath(); g.ellipse(262, 520 + k * 16, 118, 10, -0.12, Math.PI * 0.1, Math.PI * 0.9); g.stroke(); }
-    const data = g.getImageData(0, 0, w, h).data;
+    return g;
+  }
+
+  function brainPoints(n) {
+    const w = 1000, h = 720;
+    const data = brainStencil(true).getImageData(0, 0, w, h).data;
     const pts = [];
     for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) if (data[(y * w + x) * 4 + 3] > 128 && data[(y * w + x) * 4] < 100) pts.push([x, y]);
     const out = [];

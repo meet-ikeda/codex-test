@@ -1,8 +1,7 @@
 /* exobrain — Room 06: memory.md, drawn out of the brain.
-   A wireframe brain (two hemispheres with their folds, the cerebellum and the stem, built as an even closed mesh)
-   turns slowly inside a scanner's instruments — a ticked dial, a scan line, readouts of this brain's real numbers
-   and a signal trace —
-   over a faint network of drifting points; pulses run along its edges, particles leave it
+   A wireframe brain (the opening's brain in profile, covered with an even, closed triangular mesh) turns slowly
+   inside a scanner's instruments (a ticked dial, a scan line, this brain's real numbers, a signal trace)
+   over a faint network of drifting points and light streaks; pulses run along its edges, particles leave it
    and fly to the page, and each paragraph appears as its particles arrive.
    Ink on the white wall, Canvas 2D, no libraries. Runs only while this room is open. */
 "use strict";
@@ -16,163 +15,95 @@
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const INK = "#0a0a0a";
 
-  const PULSES = 26;
-  const NET = 46;          // background network points
-  const NET_LINK = 140;    // px
-  const MONO = "500 9px ui-monospace, SFMono-Regular, Menlo, monospace";
-  let V = null, N = null, VAL = null, E = null, F = null, W = 0, H = 0, TOP = 0, DPR = 1, raf = 0, t0 = 0, last = 0, revealing = 0;
+  const STEP = 9;          // stencil pixels between mesh points (the sampled mesh averaged ~30)
+  const ROUND_CELLS = 24;  // how far in from the outline the body reaches its full thickness
+  const DEPTH = 1.55;      // the opening's brain is a profile; give it a rounder body to turn
+  const PULSES = 22;
+  const NET = 70;          // background network points
+  const NET_LINK = 150;    // px
+  let V = null, E = null, F = null, W = 0, H = 0, TOP = 0, DPR = 1, raf = 0, t0 = 0, last = 0, revealing = 0;
   let P = null;            // projected vertices: x, y, depth (0 back .. 1 front), scale
-  let R = null;            // rotated normals' z (facing us > 0)
-  let INNER = null;        // +1 / -1: on that hemisphere's inner wall
-  let SEG = null, SP = null; // the sulci as segments: a, b, normal, inner, kind (0 sulcus / 1 fissure); projected
-  const SEG_STRIDE = 11;
-  const CEREB = [0, 0];      // the cerebellum's points: hidden while it is behind the hemispheres
-  let LIT = null;          // how much light each point catches (light from the upper left, in front)
-  let flyers = [], pulses = [], net = [], streaks = [], marks = [], emitRate = 1.4, emitCarry = 0, generating = false;
+  let VAL = null, NRM = null, FACING = null, FACE_SIDE = null;  // in a fold; normal; turned toward us; shell
   let stats = null;        // real numbers for the readouts (from /api/memory)
+  const MONO = "500 9px ui-monospace, SFMono-Regular, Menlo, monospace";
   const wave = new Float32Array(160);
+  let flyers = [], pulses = [], net = [], streaks = [], emitRate = 1.4, emitCarry = 0, generating = false;
 
-  // ---- the brain: a closed, even mesh (2026-10-13 — the sampled profile left big facets and holes) -------------
-
-  // Perlin noise, seeded, for the folds
-  const PERM = (() => { const p = [...Array(256).keys()]; let s = 7;
-    for (let i = 255; i > 0; i--) { s = (s * 16807) % 2147483647; const j = s % (i + 1); [p[i], p[j]] = [p[j], p[i]]; }
-    return p.concat(p); })();
-  const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
-  function grad(h, x, y, z) { const u = h < 8 ? x : y, v = h < 4 ? y : (h === 12 || h === 14 ? x : z);
-    return ((h & 1) ? -u : u) + ((h & 2) ? -v : v); }
-  function noise(x, y, z) {
-    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
-    x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
-    const u = fade(x), v = fade(y), w = fade(z), p = PERM;
-    const A = p[X] + Y, AA = p[A] + Z, AB = p[A + 1] + Z, B = p[X + 1] + Y, BA = p[B] + Z, BB = p[B + 1] + Z;
-    const l = (a, b, t) => a + t * (b - a);
-    return l(l(l(grad(p[AA] & 15, x, y, z), grad(p[BA] & 15, x - 1, y, z), u),
-               l(grad(p[AB] & 15, x, y - 1, z), grad(p[BB] & 15, x - 1, y - 1, z), u), v),
-             l(l(grad(p[AA + 1] & 15, x, y, z - 1), grad(p[BA + 1] & 15, x - 1, y, z - 1), u),
-               l(grad(p[AB + 1] & 15, x, y - 1, z - 1), grad(p[BB + 1] & 15, x - 1, y - 1, z - 1), u), v), w);
-  }
-  const clamp01 = (x) => Math.max(0, Math.min(1, x));
-  const norm3 = (a) => { const l = Math.hypot(a[0], a[1], a[2]); return [a[0] / l, a[1] / l, a[2] / l]; };
-
-  function icosphere(level) {
-    const t = (1 + Math.sqrt(5)) / 2;
-    const v = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
-      [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map(norm3);
-    let f = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6],
-      [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
-    for (let k = 0; k < level; k++) {
-      const mid = new Map(), nf = [];
-      const m = (a, b) => { const key = a < b ? a * 100000 + b : b * 100000 + a;
-        if (!mid.has(key)) { v.push(norm3([(v[a][0] + v[b][0]) / 2, (v[a][1] + v[b][1]) / 2, (v[a][2] + v[b][2]) / 2])); mid.set(key, v.length - 1); }
-        return mid.get(key); };
-      for (const [a, b, c] of f) { const ab = m(a, b), bc = m(b, c), ca = m(c, a); nf.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]); }
-      f = nf;
-    }
-    return { v, f };
-  }
-
-  // One hemisphere (side +1 / -1): x front(+)/back, y up, z to the side. Returns the position, how deep in a fold,
-  // and the fields whose zero lines are drawn as the sulci (the folds' floors) and the two big fissures.
-  function hemisphere(q, side) {
-    const [qx, qy, qz] = q, lat = qz * side;
-    const wx = 0.22 * noise(qx * 2 + 3, qy * 2, qz * 2 + side), wy = 0.22 * noise(qx * 2, qy * 2 + 5, qz * 2);
-    const n = noise((qx + wx) * 5.6 + side * 11, (qy + wy) * 5.6, qz * 5.6) + 0.3 * noise(qx * 11, qy * 11 + side * 7, qz * 11);
-    let fold = Math.pow(clamp01(1 - Math.abs(n) / 0.1), 1.2);
-    const yl = -0.22 + (0.5 - qx) * 0.36;                                           // lateral (Sylvian) fissure
-    const fisMask = clamp01((0.6 - qx) * 5) * clamp01((qx + 0.45) * 5) * clamp01(lat * 3);
-    const fis = Math.pow(clamp01(1 - Math.abs(qy - yl) / 0.06), 2) * fisMask;
-    const xc = 0.02 - 0.22 * (qy - 0.3);                                            // central sulcus
-    const cenMask = clamp01((qy - yl - 0.05) * 6);
-    const cen = Math.pow(clamp01(1 - Math.abs(qx - xc) / 0.045), 2) * cenMask;
-    fold = Math.max(fold, fis, cen * 0.9);
-    const r = 1 - 0.045 * fold - 0.05 * fis;
-    let x = qx * r, y = qy * r * (qy > 0 ? 0.78 : 0.6);
-    if (qy < 0) y -= 0.1 * Math.exp(-((qx - 0.15) ** 2) / 0.12) * clamp01(lat * 2);  // temporal lobe hangs low
-    y *= 1 - 0.18 * clamp01(qx - 0.45);                                             // frontal lobe slopes down
-    const taper = 1 - 0.14 * clamp01(qx - 0.4);
-    const zz = lat > 0 ? 0.27 + 0.52 * lat * taper                                    // the rounded outer side
-      : 0.27 - 0.26 * Math.pow(-lat, 0.35) * taper;                                   // the flat inner wall, close to the midline
-    return { p: [x * 1.02, y, side * zz * (1 - 0.07 * fold)], fold,
-             iso: [[n, 1], [qy - yl, fisMask], [qx - xc, cenMask], [lat - 0.12, 1]] };  // last: the midline's lip
-  }
-
-  // A sphere mapped into a brain part: positions, fold depth, outward normals, and which hemisphere's inner wall.
-  function mapped(level, place, side) {
-    const s = icosphere(level), v = [], val = [], iso = [], inner = [];
-    for (const q of s.v) {
-      const r = place(q);
-      v.push(r.p); val.push(r.fold); iso.push(r.iso || []);
-      inner.push(side && q[2] * side < 0.05 ? side : 0);  // the inner wall of a hemisphere, hidden behind the other one
-    }
-    const n = v.map(() => [0, 0, 0]);
-    for (const [a, b, c] of s.f) {
-      const u = [v[b][0] - v[a][0], v[b][1] - v[a][1], v[b][2] - v[a][2]], w = [v[c][0] - v[a][0], v[c][1] - v[a][1], v[c][2] - v[a][2]];
-      const cr = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
-      for (const i of [a, b, c]) { n[i][0] += cr[0]; n[i][1] += cr[1]; n[i][2] += cr[2]; }
-    }
-    const cx = v.reduce((m, p) => m + p[0], 0) / v.length, cy = v.reduce((m, p) => m + p[1], 0) / v.length,
-      cz = v.reduce((m, p) => m + p[2], 0) / v.length;
-    let out = 0;
-    for (let i = 0; i < v.length; i += 7) out += n[i][0] * (v[i][0] - cx) + n[i][1] * (v[i][1] - cy) + n[i][2] * (v[i][2] - cz);
-    return { v, val, f: s.f, n: n.map((x) => (out < 0 ? norm3(x).map((c) => -c) : norm3(x))), iso, inner };
-  }
-
-  function addPart(m) {
-    const base = V.length;
-    m.v.forEach((p, i) => { V.push(p); VAL.push(m.val[i]); N.push(m.n[i]); INNER.push(m.inner[i]); });
-    for (const [a, b, c] of m.f) F.push([base + a, base + b, base + c]);
-  }
-
-  // The zero lines of each field over a fine mesh, as segments (marching triangles): the sulci as smooth curves.
-  function addLines(m, kind = null) {
-    for (const [a, b, c] of m.f) {
-      for (let k = 0; k < m.iso[a].length; k++) {
-        const fa = m.iso[a][k], fb = m.iso[b][k], fc = m.iso[c][k];
-        if ((fa[1] + fb[1] + fc[1]) / 3 < 0.5) continue;
-        const pts = [];
-        for (const [i, j, fi, fj] of [[a, b, fa[0], fb[0]], [b, c, fb[0], fc[0]], [c, a, fc[0], fa[0]]]) {
-          if ((fi < 0) === (fj < 0)) continue;
-          const t = fi / (fi - fj);
-          pts.push([0, 1, 2].map((d) => m.v[i][d] + (m.v[j][d] - m.v[i][d]) * t));
-        }
-        if (pts.length !== 2) continue;
-        const nn = [0, 1, 2].map((d) => (m.n[a][d] + m.n[b][d] + m.n[c][d]) / 3);
-        SEG.push(...pts[0], ...pts[1], ...norm3(nn), m.inner[a] || m.inner[b] || m.inner[c], kind ?? (k ? 1 : 0));
-      }
-    }
-  }
+  // ---- the mesh -------------------------------------------------------------------------
 
   function shape() {
     if (V) return;
-    V = []; VAL = []; F = []; N = []; INNER = []; SEG = [];
-    for (const side of [1, -1]) {
-      addPart(mapped(4, (q) => hemisphere(q, side), side));   // the mesh: 2,562 points a side, even, closed
-      addLines(mapped(5, (q) => hemisphere(q, side), side));  // the sulci, traced on a finer mesh
+    const draw = window.exobrainBrainStencil;
+    if (!draw) { V = []; E = []; F = []; VAL = []; FACE_SIDE = []; V.nb = []; P = new Float32Array(0); return; }
+    // The opening's brain in profile, covered with an even triangular lattice (2026-10-13: the sampled points left
+    // big facets and holes). A front and a back shell meet at the outline, so the surface is closed; the folds
+    // (the stencil's white strokes) sink in a little and are drawn darker.
+    const w = 1000, h = 720, sx = STEP, sy = STEP * 0.866;
+    const tissue = draw(false).getImageData(0, 0, w, h).data, folds = draw(true).getImageData(0, 0, w, h).data;
+    const ink = (d, x, y) => { const k = ((y | 0) * w + (x | 0)) * 4; return d[k + 3] > 128 && d[k] < 100; };
+    const cols = Math.floor(w / sx), rows = Math.floor(h / sy);
+    const px = (r, c) => c * sx + (r % 2) * sx / 2, py = (r) => r * sy;
+    const cell = (r, c) => r * cols + c;
+    const inside = new Uint8Array(rows * cols);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) inside[cell(r, c)] = ink(tissue, px(r, c), py(r)) ? 1 : 0;
+    const around = (r, c) => (r % 2 ? [[r, c - 1], [r, c + 1], [r - 1, c], [r - 1, c + 1], [r + 1, c], [r + 1, c + 1]]
+      : [[r, c - 1], [r, c + 1], [r - 1, c - 1], [r - 1, c], [r + 1, c - 1], [r + 1, c]])
+      .filter(([a, b]) => a >= 0 && b >= 0 && a < rows && b < cols);
+    // distance (in cells) to the outline, so the body rounds off toward its edge
+    const dist = new Float32Array(rows * cols).fill(1e9), queue = [];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      if (inside[cell(r, c)] && around(r, c).some(([a, b]) => !inside[cell(a, b)]) ) { dist[cell(r, c)] = 0; queue.push([r, c]); }
     }
-    const cereb = (q) => {                                     // cerebellum, with its fine horizontal folia
-      const ph = Math.sin(q[1] * 14 + q[0] * 3), fol = Math.pow(clamp01(1 - Math.abs(ph) / 0.35), 2), r = 1 - 0.06 * fol;
-      return { p: [-0.56 + q[0] * 0.33 * r, -0.4 + q[1] * 0.21 * r, q[2] * 0.52 * r], fold: fol * 0.8, iso: [[ph, 1]] };
-    };
-    CEREB[0] = V.length;
-    addPart(mapped(3, cereb, 0));
-    CEREB[1] = V.length;
-    addLines(mapped(4, cereb, 0), 2);
-    addPart(mapped(2, (q) => ({ p: [-0.2 + q[0] * 0.1, -0.6 + q[1] * 0.26, q[2] * 0.11], fold: 0 }), 0));  // brainstem
-    SEG = Float32Array.from(SEG);
+    for (let q = 0; q < queue.length; q++) {
+      const [r, c] = queue[q];
+      for (const [a, b] of around(r, c)) if (inside[cell(a, b)] && dist[cell(a, b)] > dist[cell(r, c)] + 1) {
+        dist[cell(a, b)] = dist[cell(r, c)] + 1; queue.push([a, b]);
+      }
+    }
+    V = []; VAL = []; FACE_SIDE = [];
+    const front = new Int32Array(rows * cols).fill(-1), back = new Int32Array(rows * cols).fill(-1);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const k = cell(r, c);
+      if (!inside[k]) continue;
+      const X = px(r, c), Y = py(r), x = (X - 520) / 415, y = -(Y - 350) / 415;
+      const inStem = X > 360 && Y > 470 && X < 450;
+      const nx = (X - 520) / 400, ny = (Y - 300) / 270;
+      const body = inStem ? 0.06 : Math.max(0.05, 0.42 * Math.sqrt(Math.max(0, 1 - nx * nx * 0.8 - ny * ny * 0.6)));
+      const e = Math.min(1, dist[k] / ROUND_CELLS);                 // a dome: rises like a circle from the outline
+      const half = body * Math.sqrt(e * (2 - e));
+      const fold = ink(folds, X, Y) ? 0 : 1;
+      const z = half * DEPTH * (fold ? 0.86 : 1);
+      front[k] = V.length; V.push([x, y, z]); VAL.push(fold); FACE_SIDE.push(dist[k] ? 1 : 0);
+      if (dist[k]) { back[k] = V.length; V.push([x, y, -z]); VAL.push(fold); FACE_SIDE.push(-1); }
+      else back[k] = front[k];            // on the outline the two shells share the point: no gap
+    }
+    F = [];
+    for (let r = 0; r + 1 < rows; r++) for (let c = 0; c < cols; c++) {
+      const tris = r % 2 ? [[[r, c], [r, c + 1], [r + 1, c + 1]], [[r, c], [r + 1, c], [r + 1, c + 1]]]
+        : [[[r, c], [r, c + 1], [r + 1, c]], [[r, c], [r + 1, c - 1], [r + 1, c]]];
+      for (const t of tris) {
+        if (t.some(([a, b]) => b < 0 || b >= cols || !inside[cell(a, b)])) continue;
+        F.push(t.map(([a, b]) => front[cell(a, b)]), t.map(([a, b]) => back[cell(a, b)]));
+      }
+    }
     const n = V.length, seen = new Set(), nb = Array.from({ length: n }, () => []);
     E = [];
     for (const [a, b, c] of F) for (const [i, j] of [[a, b], [b, c], [c, a]]) {
       const key = i < j ? i * 100000 + j : j * 100000 + i;
       if (!seen.has(key)) { seen.add(key); E.push([i, j]); nb[i].push(j); nb[j].push(i); }
     }
+    // normals from the faces, turned outward (front shell toward +z, back toward -z)
+    NRM = Array.from({ length: n }, () => [0, 0, 0]);
+    for (const [a, b, c] of F) {
+      const u = [V[b][0] - V[a][0], V[b][1] - V[a][1], V[b][2] - V[a][2]], v = [V[c][0] - V[a][0], V[c][1] - V[a][1], V[c][2] - V[a][2]];
+      let cr = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      const zs = V[a][2] + V[b][2] + V[c][2];
+      if ((cr[2] < 0) !== (zs < 0)) cr = cr.map((x) => -x);
+      for (const i of [a, b, c]) { NRM[i][0] += cr[0]; NRM[i][1] += cr[1]; NRM[i][2] += cr[2]; }
+    }
+    NRM = NRM.map((x) => { const l = Math.hypot(...x) || 1; return [x[0] / l, x[1] / l, x[2] / l]; });
     V.nb = nb;
-    P = new Float32Array(n * 4); R = new Float32Array(n); LIT = new Float32Array(n);
-    SP = new Float32Array((SEG.length / SEG_STRIDE) * 5);
-    // marked memories: a few points on the outer surface, called out like readings
-    const lateral = [];
-    for (let i = 0; i < 2562; i++) if (VAL[i] < 0.2 && V[i][2] > 0.45 && Math.abs(V[i][1]) < 0.5) lateral.push(i);
-    for (let k = 0; k < 7 && lateral.length; k++) marks.push(lateral[(k * 97 + 13) % lateral.length]);
+    P = new Float32Array(n * 4); FACING = new Float32Array(n);
   }
 
   function resize() { // the canvas stays put under the bar while the page scrolls over it
@@ -191,8 +122,8 @@
 
   function layout() {
     return W < 900
-      ? { cx: W * 0.5, cy: 160, s: Math.min(W * 0.3, 130), alpha: 0.35, hud: false }  // faint behind the text on a phone
-      : { cx: W * 0.235, cy: H * 0.5, s: Math.min(W * 0.135, H * 0.3, 240), alpha: 1, hud: true };
+      ? { cx: W * 0.5, cy: 150, s: Math.min(W * 0.34, 150), alpha: 0.35 }  // faint behind the text on a phone
+      : { cx: W * 0.235, cy: H * 0.5, s: Math.min(W * 0.15, H * 0.33, 260), alpha: 1, hud: true };
   }
 
   // ---- particles flying from the brain to the page ------------------------------------
@@ -298,15 +229,26 @@
     }
     for (let i = 0; i < net.length; i++) {
       const a = net[i];
-      ctx.globalAlpha = 0.14; ctx.fillRect(a.x - 1, a.y - 1, 2, 2);
+      ctx.globalAlpha = 0.18; ctx.fillRect(a.x - 1, a.y - 1, 2, 2);
       for (let j = i + 1; j < net.length; j++) {
         const b = net[j], d = Math.hypot(a.x - b.x, a.y - b.y);
         if (d < NET_LINK) {
-          ctx.globalAlpha = 0.06 * (1 - d / NET_LINK);
+          ctx.globalAlpha = 0.09 * (1 - d / NET_LINK);
           ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
         }
       }
     }
+    // light streaks, drawn in ink: long, thin, faint, drifting to the right
+    while (streaks.length < 4) streaks.push({ y: Math.random() * H, x: -Math.random() * W, w: W * (0.3 + Math.random() * 0.4),
+      v: 30 + Math.random() * 40, h: Math.random() < 0.5 ? 1 : 2 });
+    streaks = streaks.filter((s) => {
+      s.x += s.v * dt;
+      if (s.x > W) return false;
+      const g = ctx.createLinearGradient(s.x, 0, s.x + s.w, 0);
+      g.addColorStop(0, "rgba(10,10,10,0)"); g.addColorStop(0.5, "rgba(10,10,10,0.08)"); g.addColorStop(1, "rgba(10,10,10,0)");
+      ctx.globalAlpha = 1; ctx.fillStyle = g; ctx.fillRect(s.x, s.y, s.w, s.h);
+      return true;
+    });
   }
 
   const BUCKETS = 10;
@@ -321,54 +263,46 @@
     ctx.clearRect(0, 0, W, H);
     drawNetwork(dt);
 
-    // the brain: a slow full turn, tipped a little toward us, in perspective
-    const yaw = 0.9 + t * (generating ? 0.45 : 0.14), pitch = -0.22;
-    const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch), fl = 4;
-    const n = V.length;
-    for (let i = 0; i < n; i++) {
+    // the brain: a full slow turn, tipped a little toward us, in perspective
+    const yaw = t * (generating ? 0.5 : 0.18), pitch = -0.18;
+    const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch), f = 3.4;
+    for (let i = 0; i < V.length; i++) {
       const [x, y, z] = V[i];
-      const x1 = x * cyw + z * syw, z1 = -x * syw + z * cyw;
+      const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
       const y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
-      const k = fl / (fl - z2);
-      P[i * 4] = L.cx + x1 * L.s * k; P[i * 4 + 1] = L.cy - (y2 + 0.1) * L.s * k;
-      P[i * 4 + 2] = clamp01((z2 + 1) / 2); P[i * 4 + 3] = k;
-      const [nx, ny, nz] = N[i], nx1 = nx * cyw + nz * syw, nz1 = -nx * syw + nz * cyw;
-      const ny2 = ny * cp - nz1 * sp;
-      R[i] = ny * sp + nz1 * cp;
-      LIT[i] = Math.max(0, -0.45 * nx1 + 0.55 * ny2 + 0.7 * R[i]);
+      const k = f / (f - z2);
+      P[i * 4] = L.cx + x1 * L.s * k; P[i * 4 + 1] = L.cy - y2 * L.s * k;
+      P[i * 4 + 2] = Math.max(0, Math.min(1, (z2 + 0.75) / 1.5)); P[i * 4 + 3] = k;
+      const [nx, ny, nz] = NRM[i], nz1 = -nx * sy + nz * cy;
+      FACING[i] = ny * sp + nz1 * cp;
     }
-    const far = cyw > 0 ? -1 : 1;  // the hemisphere turned away from us; its inner wall is behind the near one
-    for (let i = 0; i < n; i++) if (INNER[i] === far) R[i] = Math.min(R[i], -0.01);
-    const cerebBehind = -0.4 * sp + 0.56 * syw * cp < 0.05;  // its centre turned away from us
-    if (cerebBehind) for (let i = CEREB[0]; i < CEREB[1]; i++) R[i] = Math.min(R[i], -0.01);
-    const by = L.s * 0.98, scanY = L.cy - by + ((t * 0.18) % 1) * 2 * by;
-    // facets: a faint wash, darker in the folds and on the side turned away from the light
-    ctx.fillStyle = INK;
+    const by = L.s * 0.85, scanY = L.cy - by + ((t * 0.18) % 1) * 2 * by;
+    // facets: the faintest wash, a little darker toward us (batched by shade: the mesh is fine now)
+    ctx.fillStyle = INK; ctx.strokeStyle = INK;
     for (const b of buckets) b.length = 0;
     for (const f of F) {
-      const [a, b, c] = f, face = (R[a] + R[b] + R[c]) / 3;
+      const [a, b, c] = f, face = (FACING[a] + FACING[b] + FACING[c]) / 3;
       if (face <= 0) continue;
-      const fold = (VAL[a] + VAL[b] + VAL[c]) / 3, lit = (LIT[a] + LIT[b] + LIT[c]) / 3;
-      const v = clamp01(0.6 * (1 - lit) + 0.25 * fold);
-      buckets[Math.min(BUCKETS - 1, (v * BUCKETS) | 0)].push(f);
+      const d = (P[a * 4 + 2] + P[b * 4 + 2] + P[c * 4 + 2]) / 3;
+      buckets[Math.min(BUCKETS - 1, (d * BUCKETS) | 0)].push(f);
     }
     buckets.forEach((list, k) => {
       if (!list.length) return;
-      ctx.globalAlpha = L.alpha * 0.16 * ((k + 0.5) / BUCKETS);
+      ctx.globalAlpha = L.alpha * 0.05 * ((k + 0.5) / BUCKETS);
       ctx.beginPath();
       for (const [a, b, c] of list) { ctx.moveTo(P[a * 4], P[a * 4 + 1]); ctx.lineTo(P[b * 4], P[b * 4 + 1]); ctx.lineTo(P[c * 4], P[c * 4 + 1]); }
       ctx.fill();
     });
-    // edges: the front clear, the back a whisper; the folds drawn darker; brighter where the scan passes
+    // edges: as before, clearer toward us; the side turned away a whisper; the folds darker; the scan line lights them
     for (const b of buckets) b.length = 0;
     for (const e of E) {
-      const [a, b] = e, face = (R[a] + R[b]) / 2;
+      const [a, b] = e, d = (P[a * 4 + 2] + P[b * 4 + 2]) / 2, face = (FACING[a] + FACING[b]) / 2;
       const fold = (VAL[a] + VAL[b]) / 2, my = (P[a * 4 + 1] + P[b * 4 + 1]) / 2;
       const scan = Math.exp(-(((my - scanY) / 7) ** 2));
-      const v = face > 0 ? 0.05 + 0.22 * face + 0.2 * fold * face + 0.35 * scan : 0.02 + 0.03 * scan;
-      buckets[Math.min(BUCKETS - 1, (clamp01(v) * BUCKETS) | 0)].push(e);
+      const v = face > -0.05 ? 0.05 + 0.5 * d * d + 0.35 * fold * d + 0.3 * scan : 0.02 + 0.04 * d;
+      buckets[Math.min(BUCKETS - 1, (Math.min(1, v) * BUCKETS) | 0)].push(e);
     }
-    ctx.strokeStyle = INK; ctx.lineWidth = 0.4;
+    ctx.lineWidth = 0.5;
     buckets.forEach((list, k) => {
       if (!list.length) return;
       ctx.globalAlpha = L.alpha * ((k + 0.5) / BUCKETS) * 0.85;
@@ -376,66 +310,33 @@
       for (const [a, b] of list) { ctx.moveTo(P[a * 4], P[a * 4 + 1]); ctx.lineTo(P[b * 4], P[b * 4 + 1]); }
       ctx.stroke();
     });
-    // the sulci: smooth dark lines along the folds' floors, the two great fissures heavier
-    for (const b of buckets) b.length = 0;
-    const segs = SEG.length / SEG_STRIDE;
-    for (let k = 0; k < segs; k++) {
-      const o = k * SEG_STRIDE;
-      const nx = SEG[o + 6], ny = SEG[o + 7], nz = SEG[o + 8];
-      const face = ny * sp + (-nx * syw + nz * cyw) * cp;
-      if (face <= 0.02 || SEG[o + 9] === far || (cerebBehind && SEG[o + 10] === 2)) continue;
-      for (let e = 0; e < 2; e++) {
-        const x = SEG[o + e * 3], y = SEG[o + e * 3 + 1], z = SEG[o + e * 3 + 2];
-        const x1 = x * cyw + z * syw, z1 = -x * syw + z * cyw;
-        const y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp, kk = fl / (fl - z2);
-        SP[k * 5 + e * 2] = L.cx + x1 * L.s * kk; SP[k * 5 + e * 2 + 1] = L.cy - (y2 + 0.1) * L.s * kk;
-      }
-      const my = (SP[k * 5 + 1] + SP[k * 5 + 3]) / 2, scan = Math.exp(-(((my - scanY) / 7) ** 2));
-      const v = clamp01(0.2 + 0.7 * Math.pow(face, 0.7) + 0.4 * scan + (SEG[o + 10] === 1 ? 0.25 : 0));
-      buckets[Math.min(BUCKETS - 1, (v * BUCKETS) | 0)].push(k);
+    // the points, as before, but only every few (the mesh is ten times finer)
+    for (let i = 0; i < V.length; i += 5) {
+      if (FACING[i] <= 0) continue;
+      const d = P[i * 4 + 2], r = (0.7 + 0.9 * d) * P[i * 4 + 3];
+      ctx.globalAlpha = L.alpha * (0.15 + 0.6 * d);
+      ctx.fillRect(P[i * 4] - r / 2, P[i * 4 + 1] - r / 2, r, r);
     }
-    ctx.lineWidth = 0.85; ctx.lineCap = "round";
-    buckets.forEach((list, k) => {
-      if (!list.length) return;
-      ctx.globalAlpha = L.alpha * ((k + 0.5) / BUCKETS) * 0.95;
-      ctx.beginPath();
-      for (const i of list) { ctx.moveTo(SP[i * 5], SP[i * 5 + 1]); ctx.lineTo(SP[i * 5 + 2], SP[i * 5 + 3]); }
-      ctx.stroke();
-    });
-    ctx.lineCap = "butt";
     if (L.hud) drawHUD(L, t, yaw, scanY);
-    // marked memories, called out with a leader line
-    ctx.fillStyle = INK; ctx.strokeStyle = INK; ctx.lineWidth = 0.6;
-    marks.forEach((i, k) => {
-      if (R[i] <= 0.15) return;
-      const x = P[i * 4], y = P[i * 4 + 1], a = L.alpha * clamp01(R[i] * 2);
-      const ping = ((t * 0.6 + k * 0.37) % 1);
-      ctx.globalAlpha = a; ctx.beginPath(); ctx.arc(x, y, 2.2, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = a * (1 - ping); ctx.beginPath(); ctx.arc(x, y, 3 + ping * 12, 0, Math.PI * 2); ctx.stroke();
-      if (L.hud && k < 3) {
-        const ex = x + (k % 2 ? 46 : -46), ey = y - 26 - k * 6;
-        ctx.globalAlpha = a * 0.6; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey); ctx.lineTo(ex + (k % 2 ? 26 : -26), ey); ctx.stroke();
-        text(`N.${String(i).padStart(4, "0")}`, ex + (k % 2 ? 28 : -28), ey + 3, k % 2 ? "left" : "right", a * 0.8);
-      }
-    });
     // pulses running along the edges, like signals
     if (!reduce) {
       while (pulses.length < (generating ? PULSES * 2 : PULSES)) {
-        const a = (Math.random() * n) | 0, nb = V.nb[a];
-        if (nb.length) pulses.push({ a, b: nb[(Math.random() * nb.length) | 0], t: 0, v: 2.4 + Math.random() * 2, hops: 6 + ((Math.random() * 10) | 0) });
+        const a = (Math.random() * V.length) | 0, nb = V.nb[a];
+        if (nb.length) pulses.push({ a, b: nb[(Math.random() * nb.length) | 0], t: 0, v: 1.6 + Math.random() * 1.6, hops: 4 + ((Math.random() * 6) | 0) });
       }
       pulses = pulses.filter((p) => {
         p.t += p.v * dt;
         if (p.t >= 1) {
           if (--p.hops <= 0) return false;
           const nb = V.nb[p.b];
+          if (!nb.length) return false;
           p.a = p.b; p.b = nb[(Math.random() * nb.length) | 0]; p.t = 0;
         }
-        const face = (R[p.a] + R[p.b]) / 2;
-        if (face <= 0) return true;
         const x = P[p.a * 4] + (P[p.b * 4] - P[p.a * 4]) * p.t, y = P[p.a * 4 + 1] + (P[p.b * 4 + 1] - P[p.a * 4 + 1]) * p.t;
-        ctx.globalAlpha = L.alpha * (0.3 + 0.7 * face);
-        ctx.beginPath(); ctx.arc(x, y, 1.3 + face, 0, Math.PI * 2); ctx.fill();
+        const d = (P[p.a * 4 + 2] + P[p.b * 4 + 2]) / 2;
+        if (FACING[p.a] + FACING[p.b] < 0) return true;
+        ctx.globalAlpha = L.alpha * (0.25 + 0.75 * d);
+        ctx.beginPath(); ctx.arc(x, y, 1.6 + d, 0, Math.PI * 2); ctx.fill();
         return true;
       });
     }
@@ -443,8 +344,8 @@
     // what leaves the brain
     if (!reduce) {
       emitCarry += (generating ? 22 : emitRate) * dt;
-      const k = Math.floor(emitCarry);
-      if (k) { emit(k, null); emitCarry -= k; }
+      const n = Math.floor(emitCarry);
+      if (n) { emit(n, null); emitCarry -= n; }
     }
     ctx.lineWidth = 0.6;
     flyers = flyers.filter((f) => {
@@ -453,10 +354,10 @@
       const e = f.t < 0.5 ? 2 * f.t * f.t : 1 - Math.pow(-2 * f.t + 2, 2) / 2;
       const u = 1 - e;
       const x = u * u * f.sx + 2 * u * e * f.mx + e * e * f.tx, y = u * u * f.sy + 2 * u * e * f.my + e * e * f.ty;
-      const fd = Math.sin(Math.PI * f.t);
-      ctx.globalAlpha = 0.5 * fd;
+      const fade = Math.sin(Math.PI * f.t);
+      ctx.globalAlpha = 0.5 * fade;
       ctx.beginPath(); ctx.moveTo(f.px, f.py); ctx.lineTo(x, y); ctx.stroke();
-      ctx.globalAlpha = 0.85 * fd;
+      ctx.globalAlpha = 0.85 * fade;
       ctx.fillRect(x - 0.9, y - 0.9, 1.8, 1.8);
       f.px = x; f.py = y;
       return true;
