@@ -133,3 +133,15 @@ def test_one_project_goes_by_one_name(brain):
     assert got["exobrain Mac セットアップ"] == "exobrain"
     assert got["リアルタイム音声会話アプリを開発"] == got["リアルタイム音声会話アプリの開発（自分のアプリ）"]
     assert got["無鄰菴の庭"] == "無鄰菴の庭"
+
+
+def test_when_the_page_is_long_the_oldest_projects_give_way_first(brain):
+    from datetime import datetime
+
+    projects = "".join(f"### 案件{i}\n" + "- 長い説明の行です。" * 60 + "\n" for i in range(8))
+    page = ("# 最近の出来事\n## 注意・訂正されたこと\n- 訂正A\n## 案件ごと\n" + projects
+            + "## まだ決まっていないこと\n- 未決B\n")
+    recent.save(brain, page, [], datetime.now().astimezone(), how="ai")
+    got = recent.hand_over(brain, budget=1200)
+    assert "訂正A" in got and "未決B" in got and "### 案件0" in got and "### 案件7" not in got
+    assert "案件を量の都合で省きました" in got

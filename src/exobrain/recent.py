@@ -430,10 +430,29 @@ def hand_over(brain: Brain, budget: int = HAND_OVER_TOKENS) -> str | None:
             break
         kept_tail.append(line)
         tail_used += cost
-    lines, used = [], tail_used
-    for line in summary.rstrip().splitlines():
+    # When the page is too long, the detailed projects give way from the last (least recent) one; the other
+    # sections (corrections, the index of other projects, open questions) and the verbatim tail are kept.
+    parts = re.split(r"(?m)^(?=## )", summary.rstrip())
+    detail = next((i for i, p in enumerate(parts) if p.startswith("## 案件ごと")), None)
+    fixed = sum(estimate_tokens(p) for i, p in enumerate(parts) if i != detail) + tail_used
+    if detail is not None:
+        room = max(0, budget - fixed)
+        blocks = re.split(r"(?m)^(?=### )", parts[detail])
+        kept, spent, dropped = [], 0, 0
+        for blk in blocks:
+            cost = estimate_tokens(blk)
+            if kept and spent + cost > room:
+                dropped += 1
+                continue
+            kept.append(blk)
+            spent += cost
+        if dropped:
+            kept.append(f"（ほかに {dropped} 案件を量の都合で省きました。必要なら recall で探してください）\n")
+        parts[detail] = "".join(kept)
+    lines, used = [], 0
+    for line in "".join(parts).splitlines():
         cost = estimate_tokens(line) + 1
-        if used + cost > budget:
+        if used + tail_used + cost > budget:
             lines.append("（ここから先は量の都合で省きました。必要なら recall で海馬を探してください）")
             break
         lines.append(line)
