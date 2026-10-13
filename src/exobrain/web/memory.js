@@ -1,5 +1,5 @@
 /* exobrain — Room 06: memory.md, drawn out of the brain.
-   A wireframe brain (the opening's brain in profile, covered with an even, closed triangular mesh) held still
+   The opening's brain drawn still, as an ink plate (gyri, sulci, stippled shade, a faint mesh),
    inside a scanner's instruments (a ticked dial, a scan line, this brain's real numbers, a signal trace)
    over a faint network of drifting points and light streaks; pulses run along its edges, particles leave it
    and fly to the page, and each paragraph appears as its particles arrive.
@@ -24,7 +24,8 @@
   let V = null, E = null, F = null, W = 0, H = 0, TOP = 0, DPR = 1, raf = 0, t0 = 0, last = 0, revealing = 0;
   let P = null;            // projected vertices: x, y, depth (0 back .. 1 front), scale
   let VAL = null, NRM = null, FACING = null, FACE_SIDE = null;  // in a fold; normal; turned toward us; shell
-  let stats = null;        // real numbers for the readouts (from /api/memory)
+  let stats = null;
+  let TISSUE = null;       // the profile's ink, 1000 x 720        // real numbers for the readouts (from /api/memory)
   const MONO = "500 9px ui-monospace, SFMono-Regular, Menlo, monospace";
   const wave = new Float32Array(160);
   let flyers = [], pulses = [], net = [], streaks = [], emitRate = 1.4, emitCarry = 0, generating = false;
@@ -40,6 +41,8 @@
     // (the stencil's white strokes) sink in a little and are drawn darker.
     const w = 1000, h = 720, sx = STEP, sy = STEP * 0.866;
     const tissue = draw(false).getImageData(0, 0, w, h).data, folds = draw(true).getImageData(0, 0, w, h).data;
+    TISSUE = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) TISSUE[i] = tissue[i * 4 + 3] > 128 && tissue[i * 4] < 100 ? 1 : 0;
     const ink = (d, x, y) => { const k = ((y | 0) * w + (x | 0)) * 4; return d[k + 3] > 128 && d[k] < 100; };
     const cols = Math.floor(w / sx), rows = Math.floor(h / sy);
     const px = (r, c) => c * sx + (r % 2) * sx / 2, py = (r) => r * sy;
@@ -251,6 +254,176 @@
     });
   }
 
+  // ---- the brain as a drawing (2026-10-13): drawn once, in ink, like an anatomical plate --------------------
+  // The opening's profile, seen straight from the side. Gyri as a folded labyrinth (reaction-diffusion), the lateral
+  // fissure and central sulcus bolder, stippled shade with the light from the upper left, fine folia on the
+  // cerebellum, and the even mesh underneath, faint.
+
+  const PERM = (() => { const p = [...Array(256).keys()]; let s = 11;
+    for (let i = 255; i > 0; i--) { s = (s * 16807) % 2147483647; const j = s % (i + 1); [p[i], p[j]] = [p[j], p[i]]; }
+    return p.concat(p); })();
+  const fd = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+  function noise2(x, y) {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+    x -= Math.floor(x); y -= Math.floor(y);
+    const g = (h, a, b) => ((h & 1) ? -a : a) + ((h & 2) ? -b : b) * 0.7 + ((h & 4) ? 0.3 * a : 0);
+    const u = fd(x), v = fd(y), p = PERM;
+    const aa = g(p[p[X] + Y], x, y), ba = g(p[p[X + 1] + Y], x - 1, y), ab = g(p[p[X] + Y + 1], x, y - 1), bb = g(p[p[X + 1] + Y + 1], x - 1, y - 1);
+    return (aa + u * (ba - aa)) + v * ((ab + u * (bb - ab)) - (aa + u * (ba - aa)));
+  }
+  let rnd = 1;
+  const rand = () => { rnd = (rnd * 16807) % 2147483647; return rnd / 2147483647; };
+
+  let brainImg = null, brainKey = "";
+  const GS = 3;  // stencil pixels per field cell
+  const GYRI_SCALE = 0.3, SULCUS_AT = 0.6;  // image pixels per stencil pixel; brightness where a sulcus begins
+  let GYRI = null, gyriLoading = false;
+  function loadGyri() {  // the labyrinth image, read once; the drawing is redone when it arrives
+    if (gyriLoading) return;
+    gyriLoading = true;
+    const im = new Image();
+    im.onload = () => {
+      const c = document.createElement("canvas"); c.width = im.width; c.height = im.height;
+      const g = c.getContext("2d"); g.drawImage(im, 0, 0);
+      GYRI = g.getImageData(0, 0, im.width, im.height); brainKey = "";
+    };
+    im.src = "gyri.png";
+  }
+
+  function illustrate(L) {
+    const key = `${W}x${H}:${L.cx}:${L.cy}:${L.s}:${DPR}`;
+    if (brainImg && brainKey === key) return;
+    brainKey = key;
+    const img = document.createElement("canvas");
+    img.width = canvas.width; img.height = canvas.height;
+    const g = img.getContext("2d");
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    g.strokeStyle = INK; g.fillStyle = INK; g.lineCap = "round"; g.lineJoin = "round";
+    brainImg = img;
+    if (!TISSUE) return;
+    loadGyri();
+    const S = L.s / 415, sx = (px) => L.cx + (px - 520) * S, sy = (py) => L.cy + (py - 350) * S;
+    const w = 1000, h = 720, cols = Math.ceil(w / GS), rows = Math.ceil(h / GS);
+    const at = (px, py) => TISSUE[(Math.min(h - 1, py | 0) * w + Math.min(w - 1, px | 0))];
+    const inCereb = (px, py) => (((px - 262) * Math.cos(0.12) - (py - 520) * Math.sin(0.12)) / 118) ** 2
+      + (((px - 262) * Math.sin(0.12) + (py - 520) * Math.cos(0.12)) / 68) ** 2 < 1 && py > 466;
+    const inStem = (px, py) => px > 368 && px < 442 && py > 468;
+    // distance to the outline (cells), and the dome over it
+    const inside = new Uint8Array(rows * cols), dist = new Float32Array(rows * cols).fill(1e9), q = [];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) inside[r * cols + c] = at(c * GS, r * GS);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const k = r * cols + c;
+      if (!inside[k]) continue;
+      if (r === 0 || c === 0 || r === rows - 1 || c === cols - 1 || !inside[k - 1] || !inside[k + 1] || !inside[k - cols] || !inside[k + cols]) { dist[k] = 0; q.push(k); }
+    }
+    for (let i = 0; i < q.length; i++) {
+      const k = q[i];
+      for (const d of [-1, 1, -cols, cols]) { const m = k + d; if (inside[m] && dist[m] > dist[k] + 1) { dist[m] = dist[k] + 1; q.push(m); } }
+    }
+    const R = 72;
+    const dome = (k) => { const e = Math.min(1, dist[k] / R); return Math.sqrt(e * (2 - e)); };
+    // the gyri: a labyrinth grown by reaction-diffusion (scripts/make_gyri.py, like brain coral), cut to the
+    // profile. Bright in the image = a sulcus; the zero lines of `field` outline every gyrus.
+    const field = new Float32Array(rows * cols);
+    const G = GYRI, gw = G ? G.width : 1, gh = G ? G.height : 1;
+    const sample = (x, y) => {  // bilinear, in the image's pixels
+      x = Math.max(0, Math.min(gw - 1.001, x)); y = Math.max(0, Math.min(gh - 1.001, y));
+      const x0 = x | 0, y0 = y | 0, tx = x - x0, ty = y - y0, d = G.data;
+      const v = (xx, yy) => d[(yy * gw + xx) * 4] / 255;
+      return (v(x0, y0) * (1 - tx) + v(x0 + 1, y0) * tx) * (1 - ty) + (v(x0, y0 + 1) * (1 - tx) + v(x0 + 1, y0 + 1) * tx) * ty;
+    };
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const px = c * GS, py = r * GS;
+      field[r * cols + c] = G ? sample(px * GYRI_SCALE + 20, py * GYRI_SCALE + 20) - SULCUS_AT : noise2(px / 40, py / 40);
+    }
+    // shade: the dome lit from the upper left, deeper in the folds, darker toward the lower edge
+    const shade = new Float32Array(rows * cols);
+    for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+      const k = r * cols + c;
+      if (!inside[k]) continue;
+      const hx = (dome(k + 1) - dome(k - 1)) * 6, hy = (dome(k + cols) - dome(k - cols)) * 6;
+      const l = Math.max(0, (0.5 * hx + 0.6 * hy + 0.62) / Math.hypot(hx, hy, 1));
+      const px = c * GS, py = r * GS, n = field[k];
+      const valley = (inCereb(px, py) || inStem(px, py)) ? 0 : Math.max(0, Math.min(1, (n + 0.06) / 0.2));  // inside a sulcus
+      const soft = inCereb(px, py) || inStem(px, py) ? 0.55 : 1;
+      shade[k] = Math.min(1, soft * (0.8 * (1 - l) + 0.55 * valley + 0.2 * (py / h)));
+    }
+    // 1. the mesh underneath, faint
+    g.lineWidth = 0.4; g.globalAlpha = L.alpha * 0.07; g.beginPath();
+    for (const [a, b] of E) {
+      if (V[a][2] < 0 || V[b][2] < 0) continue;
+      g.moveTo(P[a * 4], P[a * 4 + 1]); g.lineTo(P[b * 4], P[b * 4 + 1]);
+    }
+    g.stroke();
+    // 2. stipple
+    rnd = 7;
+    const step = 1.6 / S;  // about one dot site per 1.6 screen px
+    for (let py = 0; py < h; py += step) for (let px = 0; px < w; px += step) {
+      const jx = px + rand() * step, jy = py + rand() * step;
+      const k = ((jy / GS) | 0) * cols + ((jx / GS) | 0);
+      if (!inside[k]) continue;
+      const p = Math.pow(shade[k], 1.6) * 0.55;
+      if (rand() < p) { g.globalAlpha = L.alpha * (0.35 + 0.4 * rand()); g.fillRect(sx(jx), sy(jy), 0.9, 0.9); }
+    }
+    // marching squares over a field: segments where it crosses zero, inside a mask
+    const trace = (val, ok, cb) => {
+      for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols - 1; c++) {
+        const k = r * cols + c, ks = [k, k + 1, k + cols + 1, k + cols];
+        if (!ok(k)) continue;
+        const v = ks.map(val), pts = [];
+        const corner = [[0, 0], [1, 0], [1, 1], [0, 1]];
+        for (let e = 0; e < 4; e++) {
+          const a = v[e], b = v[(e + 1) % 4];
+          if ((a < 0) === (b < 0)) continue;
+          const t = a / (a - b), [x0, y0] = corner[e], [x1, y1] = corner[(e + 1) % 4];
+          pts.push([(c + x0 + (x1 - x0) * t) * GS, (r + y0 + (y1 - y0) * t) * GS]);
+        }
+        if (pts.length >= 2) cb(pts[0], pts[1], k);
+        if (pts.length === 4) cb(pts[2], pts[3], k);
+      }
+    };
+    // 3. the gyri: thin winding lines, heavier in shadow
+    const cerebrum = (k) => { const px = (k % cols) * GS, py = ((k / cols) | 0) * GS;
+      return inside[k] && dist[k] > 1.5 && !inCereb(px, py) && !inStem(px, py); };
+    const lines = [[], [], []];
+    trace((k) => field[k], cerebrum, (a, b, k) => lines[Math.min(2, (shade[k] * 3) | 0)].push(a, b));
+    lines.forEach((list, i) => {
+      g.lineWidth = 0.75 + 0.25 * i; g.globalAlpha = L.alpha * (0.5 + 0.18 * i); g.beginPath();
+      for (let j = 0; j < list.length; j += 2) { g.moveTo(sx(list[j][0]), sy(list[j][1])); g.lineTo(sx(list[j + 1][0]), sy(list[j + 1][1])); }
+      g.stroke();
+    });
+    // 4. the named sulci and fissures, bolder
+    const sulci = window.exobrainBrainSulci ? window.exobrainBrainSulci() : [];
+    g.globalAlpha = L.alpha * 0.85;
+    for (const [lw, pts] of sulci.slice(0, 2)) {  // the lateral fissure and the central sulcus
+      g.lineWidth = Math.max(1.1, lw * S * 0.22);
+      g.beginPath(); g.moveTo(sx(pts[0][0]), sy(pts[0][1]));
+      for (let i = 1; i < pts.length - 1; i++) {
+        const mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2;
+        g.quadraticCurveTo(sx(pts[i][0]), sy(pts[i][1]), sx(mx), sy(my));
+      }
+      g.lineTo(sx(pts[pts.length - 1][0]), sy(pts[pts.length - 1][1]));
+      g.stroke();
+    }
+    // 5. cerebellum folia and the stem's grain
+    g.save();
+    g.beginPath(); g.ellipse(sx(262), sy(520), 118 * S, 68 * S, -0.12, 0, Math.PI * 2); g.clip();
+    g.lineWidth = 0.55; g.globalAlpha = L.alpha * 0.55;
+    for (let k = -9; k <= 9; k++) {
+      g.beginPath(); g.ellipse(sx(262), sy(520 + k * 7.5), 122 * S, (14 + Math.abs(k)) * S, -0.12, Math.PI * 0.05, Math.PI * 0.95); g.stroke();
+    }
+    g.restore();
+    g.lineWidth = 0.6; g.globalAlpha = L.alpha * 0.5;
+    for (const fx of [0.3, 0.55, 0.78]) {
+      g.beginPath(); g.moveTo(sx(372 + 53 * fx), sy(474)); g.quadraticCurveTo(sx(380 + 50 * fx), sy(560), sx(400 + 38 * fx), sy(656)); g.stroke();
+    }
+    // 6. the outline
+    g.lineWidth = 1.3; g.globalAlpha = L.alpha * 0.9; g.beginPath();
+    trace((k) => (inside[k] ? 1 : -1), () => true, (a, b) => { g.moveTo(sx(a[0]), sy(a[1])); g.lineTo(sx(b[0]), sy(b[1])); });
+    g.stroke();
+    g.globalAlpha = 1;
+  }
+
   const BUCKETS = 10;
   const buckets = Array.from({ length: BUCKETS }, () => []);
 
@@ -263,60 +436,25 @@
     ctx.clearRect(0, 0, W, H);
     drawNetwork(dt);
 
-    // the brain: a full slow turn, tipped a little toward us, in perspective
-    const yaw = 0.44, pitch = -0.18;  // held still at a three-quarter view (2026-10-13: the turning brain was unsettling); the instruments move
-    const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch), f = 3.4;
-    for (let i = 0; i < V.length; i++) {
-      const [x, y, z] = V[i];
-      const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
-      const y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
-      const k = f / (f - z2);
-      P[i * 4] = L.cx + x1 * L.s * k; P[i * 4 + 1] = L.cy - y2 * L.s * k;
-      P[i * 4 + 2] = Math.max(0, Math.min(1, (z2 + 0.75) / 1.5)); P[i * 4 + 3] = k;
-      const [nx, ny, nz] = NRM[i], nz1 = -nx * sy + nz * cy;
-      FACING[i] = ny * sp + nz1 * cp;
+    // the brain, held still and seen from the side: projected once, drawn once (illustrate), then shown
+    const yaw = 0;
+    if (brainKey !== `${W}x${H}:${L.cx}:${L.cy}:${L.s}:${DPR}`) {
+      for (let i = 0; i < V.length; i++) {
+        const [x, y, z] = V[i];
+        P[i * 4] = L.cx + x * L.s; P[i * 4 + 1] = L.cy - y * L.s;
+        P[i * 4 + 2] = Math.max(0, Math.min(1, (z + 0.75) / 1.5)); P[i * 4 + 3] = 1;
+        FACING[i] = NRM[i][2];
+      }
+      illustrate(L);
     }
     const by = L.s * 0.85, scanY = L.cy - by + ((t * 0.18) % 1) * 2 * by;
-    // facets: the faintest wash, a little darker toward us (batched by shade: the mesh is fine now)
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1; ctx.drawImage(brainImg, 0, 0);
+    // the scan line darkens the drawing as it passes
+    ctx.save(); ctx.beginPath(); ctx.rect(0, (scanY - 10) * DPR, canvas.width, 20 * DPR); ctx.clip();
+    ctx.globalAlpha = 0.55; ctx.drawImage(brainImg, 0, 0); ctx.restore();
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.fillStyle = INK; ctx.strokeStyle = INK;
-    for (const b of buckets) b.length = 0;
-    for (const f of F) {
-      const [a, b, c] = f, face = (FACING[a] + FACING[b] + FACING[c]) / 3;
-      if (face <= 0) continue;
-      const d = (P[a * 4 + 2] + P[b * 4 + 2] + P[c * 4 + 2]) / 3;
-      buckets[Math.min(BUCKETS - 1, (d * BUCKETS) | 0)].push(f);
-    }
-    buckets.forEach((list, k) => {
-      if (!list.length) return;
-      ctx.globalAlpha = L.alpha * 0.05 * ((k + 0.5) / BUCKETS);
-      ctx.beginPath();
-      for (const [a, b, c] of list) { ctx.moveTo(P[a * 4], P[a * 4 + 1]); ctx.lineTo(P[b * 4], P[b * 4 + 1]); ctx.lineTo(P[c * 4], P[c * 4 + 1]); }
-      ctx.fill();
-    });
-    // edges: as before, clearer toward us; the side turned away a whisper; the folds darker; the scan line lights them
-    for (const b of buckets) b.length = 0;
-    for (const e of E) {
-      const [a, b] = e, d = (P[a * 4 + 2] + P[b * 4 + 2]) / 2, face = (FACING[a] + FACING[b]) / 2;
-      const fold = (VAL[a] + VAL[b]) / 2, my = (P[a * 4 + 1] + P[b * 4 + 1]) / 2;
-      const scan = Math.exp(-(((my - scanY) / 7) ** 2));
-      const v = face > -0.05 ? 0.05 + 0.5 * d * d + 0.35 * fold * d + 0.3 * scan : 0.02 + 0.04 * d;
-      buckets[Math.min(BUCKETS - 1, (Math.min(1, v) * BUCKETS) | 0)].push(e);
-    }
-    ctx.lineWidth = 0.5;
-    buckets.forEach((list, k) => {
-      if (!list.length) return;
-      ctx.globalAlpha = L.alpha * ((k + 0.5) / BUCKETS) * 0.85;
-      ctx.beginPath();
-      for (const [a, b] of list) { ctx.moveTo(P[a * 4], P[a * 4 + 1]); ctx.lineTo(P[b * 4], P[b * 4 + 1]); }
-      ctx.stroke();
-    });
-    // the points, as before, but only every few (the mesh is ten times finer)
-    for (let i = 0; i < V.length; i += 5) {
-      if (FACING[i] <= 0) continue;
-      const d = P[i * 4 + 2], r = (0.7 + 0.9 * d) * P[i * 4 + 3];
-      ctx.globalAlpha = L.alpha * (0.15 + 0.6 * d);
-      ctx.fillRect(P[i * 4] - r / 2, P[i * 4 + 1] - r / 2, r, r);
-    }
     if (L.hud) drawHUD(L, t, yaw, scanY);
     // pulses running along the edges, like signals
     if (!reduce) {

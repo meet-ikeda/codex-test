@@ -34,7 +34,8 @@ MAX_GRAPH_EDGES = 20000
 INBOX_POLL_SECONDS = 60
 VAULT_SCAN_HOURS = 12  # the #remember scan; sleep also runs one every night
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-                ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2"}
+                ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2",
+                ".png": "image/png"}
 
 
 def _label_counts(labels_json: str | None) -> dict[str, int] | None:

@@ -6,6 +6,7 @@
 (function () {
   window.exobrainBrainPoints = (n) => brainPoints(n); // shared with memory.js (Room 06)
   window.exobrainBrainStencil = (sulci) => brainStencil(sulci); // the same profile, for Room 06's mesh
+  window.exobrainBrainSulci = () => SULCI;                       // its folds as strokes: [width, points]
   const overlay = document.getElementById("intro");
   const canvas = document.getElementById("intro-canvas");
   if (!overlay || !canvas) return;
@@ -24,6 +25,22 @@
 
   // A brain in profile (front to the right), drawn as a stencil: ink for tissue, white strokes for
   // the sulci. Particles sample the ink; depth follows the outline so the brain can turn a little.
+  const SULCI = [
+    [16, [[745, 470], [650, 430], [560, 400], [470, 365]]],          // lateral (Sylvian) fissure
+    [13, [[585, 92], [565, 170], [545, 250], [520, 340]]],             // central sulcus
+    [10, [[700, 110], [690, 190], [705, 260], [690, 330]]],            // precentral
+    [10, [[455, 90], [470, 170], [450, 240], [430, 320]]],             // postcentral
+    [10, [[820, 200], [760, 230], [720, 300], [770, 360]]],            // frontal folds
+    [9, [[860, 290], [800, 300], [785, 360], [840, 400]]],
+    [9, [[650, 200], [610, 240], [640, 300], [600, 360]]],
+    [9, [[330, 120], [360, 190], [320, 250], [350, 330]]],            // parietal
+    [9, [[230, 190], [280, 230], [250, 300], [290, 360]]],            // occipital
+    [9, [[190, 330], [240, 360], [220, 410], [270, 430]]],
+    [9, [[430, 425], [520, 450], [600, 470], [690, 495]]],            // superior temporal
+    [8, [[470, 505], [560, 530], [640, 525]]],                        // inferior temporal
+    [8, [[380, 400], [360, 440], [330, 440]]],
+  ];
+
   function brainStencil(sulci = true) { // 1000 x 720: ink for tissue; with sulci, white strokes for the folds
     const off = document.createElement("canvas");
     const w = 1000, h = 720;
@@ -47,21 +64,7 @@
     if (!sulci) return g;
     // sulci: the lateral fissure, the central sulcus, and the smaller folds
     g.strokeStyle = "#fff"; g.lineCap = "round"; g.lineJoin = "round";
-    const S = [
-      [16, [[745, 470], [650, 430], [560, 400], [470, 365]]],          // lateral (Sylvian) fissure
-      [13, [[585, 92], [565, 170], [545, 250], [520, 340]]],             // central sulcus
-      [10, [[700, 110], [690, 190], [705, 260], [690, 330]]],            // precentral
-      [10, [[455, 90], [470, 170], [450, 240], [430, 320]]],             // postcentral
-      [10, [[820, 200], [760, 230], [720, 300], [770, 360]]],            // frontal folds
-      [9, [[860, 290], [800, 300], [785, 360], [840, 400]]],
-      [9, [[650, 200], [610, 240], [640, 300], [600, 360]]],
-      [9, [[330, 120], [360, 190], [320, 250], [350, 330]]],            // parietal
-      [9, [[230, 190], [280, 230], [250, 300], [290, 360]]],            // occipital
-      [9, [[190, 330], [240, 360], [220, 410], [270, 430]]],
-      [9, [[430, 425], [520, 450], [600, 470], [690, 495]]],            // superior temporal
-      [8, [[470, 505], [560, 530], [640, 525]]],                        // inferior temporal
-      [8, [[380, 400], [360, 440], [330, 440]]],
-    ];
+    const S = SULCI;
     for (const [lw, pts] of S) {
       g.lineWidth = lw;
       g.beginPath();
