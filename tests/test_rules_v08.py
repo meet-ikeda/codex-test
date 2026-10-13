@@ -222,3 +222,13 @@ def test_a_grown_rule_shows_its_receipts(brain, session):
     assert "根拠 2 件" in portrait.digest(brain)[0]
     r = brain.recall(session, "流し読みされる見出しは言い切る")
     assert "（根拠 2 件）" in r["context"]
+
+
+def test_a_rule_for_this_scene_comes_before_a_rule_for_all_work(brain):
+    """2026-10-13: the nearest scope wins (DeepSeek Harness's layered registries)."""
+    from exobrain.recall import Hit, pack
+
+    mk = lambda i, scope, score: Hit(id=i, kind="procedural", body=f"ルール{i}", created_at="", created_by="",  # noqa: E731
+                                     activation=score, score=score, hops=0, path=[i], stage="confirmed", scope=scope)
+    got = pack(brain._recaller, [mk("g", "", 0.9), mk("s", "案件A", 0.5)], set(), 1500)
+    assert [h.id for h in got.rules][:2] == ["s", "g"]

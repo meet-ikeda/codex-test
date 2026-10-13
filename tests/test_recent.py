@@ -112,3 +112,14 @@ def test_names_that_came_up_on_several_days_are_counted():
     items = [{"day": "2026-10-09", "lines": [("決まったこと", "[[池田コピー課]]の声")]},
              {"day": "2026-10-10", "lines": [("あったこと", "[[池田コピー課|コピー課]]と[[Anam]]")]}]
     assert recent.recurring(items) == [("池田コピー課", 2)]
+
+
+def test_the_newest_days_are_kept_word_for_word_and_always_handed_over(brain, session):
+    daily(brain, session, "見積", "案件B", decisions=["単価は 1 本 38,500 円（税別）にする"])
+    from exobrain.inbox import ingest
+
+    ingest(brain)
+    r = recent.write(brain)
+    assert recent.TAIL_HEADING in r["markdown"] and "単価は 1 本 38,500 円（税別）にする" in r["markdown"]
+    got = recent.hand_over(brain, budget=recent.TAIL_TOKENS + 20)  # the summary is cut first, the tail stays
+    assert "38,500 円" in got.split(recent.TAIL_HEADING)[1]

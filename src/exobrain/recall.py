@@ -347,6 +347,9 @@ def pack(recaller: Recaller, hits: list[Hit], cue_ids: set[str], budget: int) ->
 
     # 1) Rules: activated rules first, then the strongest standing rules.
     activated_rules = [h for h in hits if h.kind == "procedural" and h.stage in ("confirmed", "tentative")]
+    # The nearest scope wins (2026-10-11, after DeepSeek Harness's layered registries): a rule for this project or
+    # scene comes before a rule for all work, so that when they disagree the narrower one is read first and stands.
+    activated_rules.sort(key=lambda h: 0 if h.scope else 1)
     rules = take(activated_rules, int(budget * RULES_SHARE))
     chosen |= {h.id for h in rules}
     rest = int(budget * RULES_SHARE) - sum(estimate_tokens(format_line(h)) + 1 for h in rules)

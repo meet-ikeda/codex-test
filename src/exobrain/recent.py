@@ -239,6 +239,25 @@ def mechanical(items: list[dict]) -> str:
     return "\n".join(out).strip()
 
 
+TAIL_HEADING = "## 直近の原文（要約していない）"
+TAIL_SECTIONS = ("注意・訂正されたこと", "オーナーの言葉", "オーナーのこだわり・理由", "決まったこと", "ボツになったこと",
+                 "次にやること", "未解決・次に続くこと")
+TAIL_LINES = 40
+TAIL_TOKENS = 1_500
+
+
+def tail(items: list[dict]) -> str:
+    """The last two days' weightiest lines, word for word (2026-10-13, after DeepSeek Harness's compaction: the old
+    part is summarised, the newest part is kept as it was, so numbers and wording are not rounded off)."""
+    days = sorted({it["day"] for it in items})[-2:]
+    out = []
+    for it in sorted((it for it in items if it["day"] in days), key=lambda it: it["day"], reverse=True):
+        for heading, text in it["lines"]:
+            if heading in TAIL_SECTIONS and len(out) < TAIL_LINES:
+                out.append(f"- {_md_day(it['day'])} {it['project']}・{heading}: {text[:200]} [{it['source_id']}]")
+    return (TAIL_HEADING + "\n" + "\n".join(out)) if out else ""
+
+
 def write(brain: Brain, now: datetime | None = None, use_ai: bool = True) -> dict[str, Any]:
     """Write recent.md. Falls back to the mechanical page when the AI is not there or fails."""
     from .sleep import find_claude
@@ -269,14 +288,17 @@ def write(brain: Brain, now: datetime | None = None, use_ai: bool = True) -> dic
             except ValueError:
                 out = {}
             body = (out.get("result") or "").strip()
-            if proc.returncode == 0 and body and not out.get("is_error"):
+            if proc.returncode == 0 and body and not out.get("is_error") and len(body) >= len(text):
+                error = "要約が元の原文より短くなりませんでした"  # a summary that does not shrink is not used
+            elif proc.returncode == 0 and body and not out.get("is_error"):
                 u = out.get("usage") or {}
                 usage = {"model": next(iter(out.get("modelUsage") or {}), None), "digest_tokens": estimate_tokens(text),
                          "input_tokens": u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
                          + u.get("cache_creation_input_tokens", 0), "output_tokens": u.get("output_tokens", 0)}
                 return save(brain, body, items, now, how="ai", source_text=text, cost=out.get("total_cost_usd"),
                             usage=usage)
-            error = (proc.stderr.strip() or body or f"終了コード {proc.returncode}")[:300]
+            else:
+                error = (proc.stderr.strip() or body or f"終了コード {proc.returncode}")[:300]
         except subprocess.TimeoutExpired:
             error = "時間内に返りませんでした"
     body = f"# 最近の出来事（{span}）\n\n" + mechanical(items)
@@ -314,6 +336,8 @@ def save(brain: Brain, body: str, items: list[dict], now: datetime, how: str, so
          cost: float | None = None, usage: dict | None = None, error: str | None = None) -> dict[str, Any]:
     ids = {it["source_id"]: it["day"] for it in items}
     body, unknown, bad_quotes = _check(body, ids, source_text) if source_text else (body, [], 0)
+    if items:
+        body = body.rstrip() + "\n\n" + tail(items)
     days = sorted({it["day"] for it in items})
     how_ja = {"ai": "AI が要約したもの", "mechanical": "AI に頼めなかったため、プログラムが項目を並べたもの",
               "none": "出来事がなかったもの"}[how]
@@ -350,14 +374,23 @@ def hand_over(brain: Brain, budget: int = HAND_OVER_TOKENS) -> str | None:
     r = read(brain)
     if not r.get("markdown"):
         return None
-    lines, used = [], 0
-    for line in r["markdown"].splitlines():
+    summary, _, rest = r["markdown"].partition(TAIL_HEADING)
+    kept_tail, tail_used = [], 0
+    for line in ((TAIL_HEADING + rest).splitlines() if rest else []):
+        cost = estimate_tokens(line) + 1
+        if tail_used + cost > TAIL_TOKENS:
+            break
+        kept_tail.append(line)
+        tail_used += cost
+    lines, used = [], tail_used
+    for line in summary.rstrip().splitlines():
         cost = estimate_tokens(line) + 1
         if used + cost > budget:
             lines.append("（ここから先は量の都合で省きました。必要なら recall で海馬を探してください）")
             break
         lines.append(line)
         used += cost
+    lines += ["", *kept_tail] if kept_tail else []
     lines.append("（[src_...] の原文は open_source で読めます。判断の前に細部を確かめたいときに使う）")
     text = "\n".join(lines)
     at = r.get("generated_at")
