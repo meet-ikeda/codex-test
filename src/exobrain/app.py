@@ -225,7 +225,18 @@ class App:
         from . import recent
 
         return {**portrait.read(self.brain), **self.memory_state, "recall_view": portrait.recall_view(self.brain),
-                "recent": {**recent.read(self.brain), **self.recent_state}}
+                "recent": {**recent.read(self.brain), **self.recent_state}, "stats": self._memory_stats()}
+
+    def _memory_stats(self) -> dict[str, Any]:
+        """The real numbers Room 06's instruments read out."""
+        c = self.brain._conn
+        kinds = dict(c.execute("SELECT kind, COUNT(*) FROM nodes WHERE status = 'active' AND kind != 'concept'"
+                               " GROUP BY kind").fetchall())
+        mean = c.execute("SELECT AVG(" + strength_sql() + ") FROM nodes WHERE status = 'active'"
+                         " AND kind != 'concept'").fetchone()[0]
+        return {"cortex": sum(kinds.values()), "rules": kinds.get("procedural", 0), "cases": kinds.get("case", 0),
+                "waiting": c.execute("SELECT COUNT(*) FROM hippocampus WHERE status = 'waiting'").fetchone()[0],
+                "strength": round(mean, 2) if mean is not None else None}
 
     def write_recent(self) -> dict[str, Any]:
         from . import recent
