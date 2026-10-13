@@ -1,5 +1,5 @@
 /* exobrain — Room 06: memory.md, drawn out of the brain.
-   A wireframe brain (the opening's brain in profile, covered with an even, closed triangular mesh) turns slowly
+   A wireframe brain (the opening's brain in profile, covered with an even, closed triangular mesh) held still
    inside a scanner's instruments (a ticked dial, a scan line, this brain's real numbers, a signal trace)
    over a faint network of drifting points and light streaks; pulses run along its edges, particles leave it
    and fly to the page, and each paragraph appears as its particles arrive.
@@ -264,7 +264,7 @@
     drawNetwork(dt);
 
     // the brain: a full slow turn, tipped a little toward us, in perspective
-    const yaw = t * (generating ? 0.5 : 0.18), pitch = -0.18;
+    const yaw = 0.44, pitch = -0.18;  // held still at a three-quarter view (2026-10-13: the turning brain was unsettling); the instruments move
     const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch), f = 3.4;
     for (let i = 0; i < V.length; i++) {
       const [x, y, z] = V[i];
