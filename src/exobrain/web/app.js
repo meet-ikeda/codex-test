@@ -387,7 +387,7 @@ function renderDetail({ node, neighbors, source, shelves, revisions = [], quotes
         el("button", { class: "link cap", on: { click: () => answer("yes") } }, "そう（ルールにする）"), " / ",
         el("button", { class: "link cap", on: { click: () => answer("no") } }, "違う（外す）")));
     }
-    const facts = [["Recalled", pad(node.access_count, 2)], ["Strength", strength != null ? strength.toFixed(2) : node.base_strength.toFixed(1)],
+    const facts = [["Recalled", pad(node.access_count, 2)], ["Strength", (node.strength ?? strength ?? node.base_strength).toFixed(2)],
       ["Repeated", pad(Math.max(0, (node.occurrences || 1) - 1), 2)],
       ["Importance", node.importance.toFixed(1)], ["Corrected", pad(node.corrections, 2)],
       ["Links", pad(neighbors.length, 2)], ["Last recall", node.last_activated_at ? when(node.last_activated_at, false) : "—"]];
