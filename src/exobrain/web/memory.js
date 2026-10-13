@@ -140,7 +140,7 @@
   }
 
   function emit(n, block) {
-    if (!V) return;
+    if (!V || !PARTICLES) return;
     for (let k = 0; k < n; k++) {
       let i = 0;
       for (let tries = 0; tries < 10; tries++) { // from the side facing us
@@ -195,7 +195,6 @@
     }
     ctx.stroke();
     // the scan line, with its reading
-    ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.moveTo(cx - bx, scanY); ctx.lineTo(cx + bx, scanY); ctx.stroke();
     ctx.globalAlpha = 0.9; ctx.fillRect(cx - bx - 4, scanY - 1.5, 4, 3); ctx.fillRect(cx + bx, scanY - 1.5, 4, 3);
     text(`SCAN ${String(Math.round((scanY - (cy - by)) / (2 * by) * 100)).padStart(3, "0")}%`, cx + bx + 8, scanY + 3, "left", 0.6);
     // readouts: real numbers from this brain
@@ -454,6 +453,32 @@
     g.globalAlpha = 1;
   }
 
+  const PARTICLES = false;  // particles flying to the page: off (2026-10-13); the scan band shows the reading
+
+  // The scan band: many waves laid over one another, crossing the brain as it moves down — like a voice print,
+  // in ink. Faster and taller while the brain is being read.
+  const WAVES = Array.from({ length: 22 }, (_, i) => ({
+    ph: i * 0.37, k1: 0.016 + 0.009 * Math.sin(i * 1.7), k2: 0.04 + 0.02 * Math.cos(i * 2.3),
+    w1: 1.1 + 0.4 * Math.sin(i), w2: -1.7 + 0.5 * Math.cos(i * 1.3), a: 0.55 + 0.45 * Math.sin(i * 0.9) ** 2,
+    alpha: 0.1 + 0.32 * Math.abs(Math.sin(i * 1.37)), lw: 0.5 + 0.5 * Math.abs(Math.cos(i * 0.77)) }));
+  function drawScanWaves(L, scanY, t) {
+    const half = L.s * 1.25, x0 = L.cx - half, x1 = L.cx + half, amp = (generating ? 92 : 66) * (L.s / 200);
+    const speed = generating ? 2.2 : 1;
+    ctx.strokeStyle = INK;
+    for (const wv of WAVES) {
+      ctx.globalAlpha = L.alpha * wv.alpha; ctx.lineWidth = wv.lw;
+      ctx.beginPath();
+      for (let x = x0; x <= x1; x += 3) {
+        const u = (x - x0) / (x1 - x0), env = Math.pow(Math.sin(Math.PI * u), 1.6) * (0.75 + 0.25 * Math.sin(u * 7 + t * 0.6));
+        const y = scanY + amp * wv.a * env * (0.6 * Math.sin(x * wv.k1 + t * wv.w1 * speed + wv.ph)
+          + 0.4 * Math.sin(x * wv.k2 + t * wv.w2 * speed + wv.ph * 1.9) + 0.25 * Math.sin(x * 0.009 - t * 0.7 + wv.ph * 3.1));
+        x === x0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   const BUCKETS = 10;
   const buckets = Array.from({ length: BUCKETS }, () => []);
 
@@ -481,10 +506,11 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1; ctx.drawImage(brainImg, 0, 0);
     // the scan line darkens the drawing as it passes
-    ctx.save(); ctx.beginPath(); ctx.rect(0, (scanY - 10) * DPR, canvas.width, 20 * DPR); ctx.clip();
+    ctx.save(); ctx.beginPath(); ctx.rect(0, (scanY - 40) * DPR, canvas.width, 80 * DPR); ctx.clip();
     ctx.globalAlpha = 0.55; ctx.drawImage(brainImg, 0, 0); ctx.restore();
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.fillStyle = INK; ctx.strokeStyle = INK;
+    drawScanWaves(L, scanY, t);
     if (PIC && PIC_RECT && PIC_PTS.length && !reduce) {  // a few points light up in turn, like readings
       if (!pings.length) for (let k = 0; k < 7; k++) pings.push(PIC_PTS[(k * 977 + 131) % PIC_PTS.length]);
       ctx.lineWidth = 0.7;
